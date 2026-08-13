@@ -315,5 +315,24 @@ the path trusted system-wide; if the message appears anyway, run it directly:
 sudo git config --system --add safe.directory /opt/support-agent
 ```
 
+**`Conflict. The container name "/api" is already in use`.** A stack from an
+earlier lecture is still running. Docker container names are global, not scoped
+to a compose project, so two projects cannot both use one. The compose file here
+sets no `container_name` for that reason — Compose generates `deploy-api-1` — but
+an older stack that does set one still holds the name, and still holds ports 80
+and 443.
+
+Find and retire it:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Label "com.docker.compose.project.working_dir"}}'
+cd <that directory> && docker compose down
+```
+
+Note that its Caddy volume does not carry over to the new project, so Caddy will
+request fresh certificates on the next deploy. That is fine — Let's Encrypt
+allows 50 per domain per week — but it is why the padlock takes a few extra
+seconds to appear the first time.
+
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.

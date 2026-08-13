@@ -40,13 +40,27 @@ set_tag() {
 }
 
 wait_for_health() {
-  local deadline=$((SECONDS + HEALTH_TIMEOUT)) status=
+  # Ask compose which container belongs to this project, rather than inspecting
+  # a container called "api". Names are global in Docker, not scoped to the
+  # project: a stack left running from an earlier lecture owns that name, and
+  # inspecting it reports on the wrong container entirely — or on one with no
+  # healthcheck at all, which looks identical to a deploy that never came up.
+  #
+  # Restricted to running containers and reduced to one line, because during a
+  # recreate both the old and the new container exist for a moment and two IDs
+  # in one argument makes `docker inspect` fail.
+  local deadline=$((SECONDS + HEALTH_TIMEOUT)) status= cid=
   while [ $SECONDS -lt $deadline ]; do
-    status=$(docker inspect -f '{{.State.Health.Status}}' api 2>/dev/null || echo missing)
-    case "$status" in
-      healthy) return 0 ;;
-      unhealthy) echo "container reported unhealthy" >&2; return 1 ;;
-    esac
+    cid=$(docker compose ps -q --status running api 2>/dev/null | tail -n1)
+    if [ -n "$cid" ]; then
+      status=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo missing)
+      case "$status" in
+        healthy) return 0 ;;
+        unhealthy) echo "container reported unhealthy" >&2; return 1 ;;
+      esac
+    else
+      status="no running container"
+    fi
     sleep 3
   done
   echo "container did not become healthy within ${HEALTH_TIMEOUT}s (last status: $status)" >&2
