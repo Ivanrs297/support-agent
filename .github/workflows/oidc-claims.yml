@@ -1,0 +1,38 @@
+name: OIDC claims
+
+# Temporary. Prints the subject and audience the runner presents to AWS, so a
+# trust policy mismatch can be read rather than guessed at. Delete once the
+# deploy works.
+#
+# It requests an OIDC token and decodes only the claims from it. The token
+# itself is never printed: it is a bearer credential, short-lived but real.
+on:
+  push:
+    branches: [debug/oidc-claims]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  claims:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decode the claims
+        run: |
+          set -euo pipefail
+
+          token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+
+          payload=$(cut -d. -f2 <<< "$token")
+          pad=$(( (4 - ${#payload} % 4) % 4 ))
+          padded="$payload$(printf '=%.0s' $(seq 0 $((pad - 1)) 2>/dev/null) 2>/dev/null || true)"
+          claims=$(tr '_-' '/+' <<< "$padded" | base64 -d 2>/dev/null | jq -c '{sub, aud, repository, repository_owner, ref, event_name}')
+
+          echo "$claims" | jq .
+
+          # Emitted as an annotation so it is readable from the checks API
+          # without downloading the logs.
+          echo "::notice title=oidc-claims::$claims"
