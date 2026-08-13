@@ -67,6 +67,22 @@ git push origin v2
 Tag `main` after the pull request that completes a version is merged. The tag
 message states what the version contains.
 
+**Every version must be described in the root `README.md`.** A tag alone says a
+version exists; it does not say what changed or why anyone should care. The README
+carries a `## Versions` section, newest first, and it is updated **in the same pull
+request that completes the version** — never afterwards, or it never happens.
+
+Each entry states what the version added, and what it deliberately left out. What
+is missing at a given point is as instructive as what is present: this repository
+is teaching material, and a reader should be able to follow how the system was
+built up rather than only see where it landed.
+
+Order of operations when closing a version:
+
+1. Update the `## Versions` section in `README.md` inside the feature branch.
+2. Merge the pull request.
+3. Tag the resulting commit on `main` and push the tag.
+
 | Tag | Contents |
 |---|---|
 | `v1` | AWS host provisioned from user-data, custom domain, Caddy with automatic TLS. No agent yet. |
