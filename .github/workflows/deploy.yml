@@ -108,6 +108,32 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: deploy-${{ github.run_id }}
 
+      # SendCommand answers a stopped instance, a wrong region and an unregistered
+      # SSM agent with the same opaque InvalidInstanceId. Ask first, so the log
+      # says which one it is.
+      - name: Check the host is registered with SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          echo "looking for $INSTANCE_ID in ${AWS_REGION}"
+
+          info=$(aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query 'InstanceInformationList[0]' --output json)
+
+          if [ "$info" = "null" ]; then
+            echo "::error::$INSTANCE_ID is not a managed instance in ${AWS_REGION}. Check that AWS_REGION matches where the instance lives, that it is running, that it has an instance profile with AmazonSSMManagedInstanceCore, and that amazon-ssm-agent is active on the host."
+            exit 1
+          fi
+
+          jq -r '"agent \(.AgentVersion) on \(.PlatformName) \(.PlatformVersion), ping \(.PingStatus), last seen \(.LastPingDateTime)"' <<< "$info"
+
+          [ "$(jq -r .PingStatus <<< "$info")" = "Online" ] || {
+            echo "::error::The SSM agent last reported $(jq -r .PingStatus <<< "$info"). The host is registered but not talking to SSM right now."
+            exit 1
+          }
+
       # No SSH key, no open port 22, no long-lived AWS credentials. The runner
       # exchanges its OIDC token for a session that may run one command on one
       # instance, and the instance talks outbound to SSM.

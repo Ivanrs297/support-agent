@@ -229,9 +229,33 @@ steps:
 
 Comparing those two outputs settles any trust policy question in one run.
 
-**`InvalidInstanceId` from SSM.** The instance is not registered with SSM — check
-`systemctl is-active amazon-ssm-agent` on the host. Note that the Ubuntu AMI
-ships the agent as a snap; see the provisioning runbook for why that matters.
+**`InvalidInstanceId` — "Instances not in a valid state for account".** SSM
+returns this whenever it cannot find the instance as a *managed instance* in the
+region the command was sent to. Four different problems share the one message:
+
+```bash
+# Is it registered, and where?
+aws ssm describe-instance-information --region us-east-2 \
+  --query 'InstanceInformationList[].{Id:InstanceId,Ping:PingStatus,Agent:AgentVersion}' \
+  --output table
+
+# Is it running, and does it have an instance profile?
+aws ec2 describe-instances --region us-east-2 --instance-ids i-0123456789abcdef0 \
+  --query 'Reservations[].Instances[].{State:State.Name,Profile:IamInstanceProfile.Arn}' \
+  --output json
+```
+
+- **Wrong region.** `AWS_REGION` must be where the instance lives. An instance ID
+  is meaningless in another region, and the error does not say so.
+- **No instance profile**, or one without `AmazonSSMManagedInstanceCore`. The
+  `Profile` field above is `null` when this is the problem.
+- **The instance is stopped.**
+- **The agent is not running.** `systemctl is-active amazon-ssm-agent` on the
+  host. Ubuntu AMIs ship it as a snap, which the bootstrap replaces — see the
+  provisioning runbook for why that matters.
+
+The deploy job checks this before sending anything, so the log names the actual
+cause rather than repeating the opaque error.
 
 **The container never becomes healthy.** The host has already rolled back, so
 production is up on the previous image. Read the SSM output in the job log, then

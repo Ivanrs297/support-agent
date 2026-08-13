@@ -152,8 +152,12 @@ fi
 
 # ---------- 3. Permissions ----------
 # Send one shell command to one instance, and read the result back. Not
-# ssm:* and not Resource "*": a leaked token should not be able to run
-# commands across the account.
+# ssm:* and not Resource "*" for the send: a leaked token should not be able to
+# run commands across the account.
+#
+# The read actions take Resource "*" because SSM does not support resource-level
+# permissions for them. They disclose command output and which instances are
+# registered; neither lets anything be changed.
 PERMISSIONS=$(jq -n \
   --arg region "$REGION" --arg account "$ACCOUNT_ID" --arg instance "$INSTANCE_ID" '{
   Version: "2012-10-17",
@@ -170,7 +174,12 @@ PERMISSIONS=$(jq -n \
     {
       Sid: "ReadTheResult",
       Effect: "Allow",
-      Action: ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:ListCommands"],
+      Action: [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:ListCommands",
+        "ssm:DescribeInstanceInformation"
+      ],
       Resource: "*"
     }
   ]
