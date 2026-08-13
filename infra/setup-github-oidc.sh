@@ -92,7 +92,38 @@ fi
 # The `sub` condition is the whole security boundary. Without it, any repository
 # on GitHub could assume this role. Restricted to main, so a pull request from a
 # fork cannot deploy.
-TRUST=$(jq -n --arg provider "$PROVIDER_ARN" --arg repo "$REPO" '{
+#
+# There are two forms of that claim in the wild, and which one a repository gets
+# is not something this script can choose:
+#
+#   classic     repo:OWNER/NAME:ref:refs/heads/main
+#   immutable   repo:OWNER@1234/NAME@5678:ref:refs/heads/main
+#
+# The immutable form carries the numeric owner and repository IDs. It exists so
+# that deleting a repository and recreating one with the same name does not
+# inherit its deploy permissions — the names can be reused, the IDs cannot.
+#
+# Both are allowed here. A list under StringEquals means "any of these", and
+# pinning both costs nothing: each still names one repository and one branch.
+echo "reading the numeric IDs for $REPO"
+REPO_META=$(curl -fsSL "https://api.github.com/repos/$REPO") || {
+  echo "Could not read https://api.github.com/repos/$REPO — is the name right?" >&2
+  exit 1
+}
+OWNER=$(jq -r .owner.login <<< "$REPO_META")
+OWNER_ID=$(jq -r .owner.id <<< "$REPO_META")
+REPO_NAME=$(jq -r .name <<< "$REPO_META")
+REPO_ID=$(jq -r .id <<< "$REPO_META")
+
+SUB_IMMUTABLE="repo:${OWNER}@${OWNER_ID}/${REPO_NAME}@${REPO_ID}:ref:refs/heads/main"
+SUB_CLASSIC="repo:${OWNER}/${REPO_NAME}:ref:refs/heads/main"
+echo "  $SUB_IMMUTABLE"
+echo "  $SUB_CLASSIC"
+
+TRUST=$(jq -n \
+  --arg provider "$PROVIDER_ARN" \
+  --arg sub_immutable "$SUB_IMMUTABLE" \
+  --arg sub_classic "$SUB_CLASSIC" '{
   Version: "2012-10-17",
   Statement: [{
     Effect: "Allow",
@@ -101,7 +132,7 @@ TRUST=$(jq -n --arg provider "$PROVIDER_ARN" --arg repo "$REPO" '{
     Condition: {
       StringEquals: {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:\($repo):ref:refs/heads/main"
+        "token.actions.githubusercontent.com:sub": [$sub_immutable, $sub_classic]
       }
     }
   }]
