@@ -72,11 +72,20 @@ an SSH session, which is why the workflow prints both stdout and stderr.
 
 ### 3.1 AWS: the role GitHub assumes
 
-From a machine with admin AWS access:
+This needs administrative AWS access, so **not** from the agent host — its
+instance profile grants SSM and nothing else, and putting admin credentials on a
+public-facing box to work around that defeats the point of the whole setup.
+
+The path with nothing to install is [AWS
+CloudShell](https://us-east-2.console.aws.amazon.com/cloudshell), which already
+has the CLI and `jq` and runs as your console session:
 
 ```bash
-INSTANCE_ID=i-0123456789abcdef0 bash infra/setup-github-oidc.sh
+curl -fsSLO https://raw.githubusercontent.com/Ivanrs297/support-agent/main/infra/setup-github-oidc.sh
+INSTANCE_ID=i-0123456789abcdef0 bash setup-github-oidc.sh
 ```
+
+Locally instead, if you prefer: `brew install awscli jq && aws configure`.
 
 It is idempotent. It creates the OIDC provider if the account does not have one,
 creates or updates the role, and attaches the policy. It prints the three values
