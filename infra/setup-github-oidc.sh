@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
 #
 # Lets GitHub Actions deploy to the EC2 host without any long-lived AWS
-# credentials. Run once, from a machine with admin AWS access.
+# credentials. Run once.
 #
-#   bash infra/setup-github-oidc.sh
+#   INSTANCE_ID=i-0abc... bash infra/setup-github-oidc.sh
+#
+# WHERE TO RUN THIS: somewhere with administrative AWS access. The easiest is
+# AWS CloudShell, which already has the aws CLI and jq and uses your console
+# session:
+#
+#   https://us-east-2.console.aws.amazon.com/cloudshell
+#   curl -fsSLO https://raw.githubusercontent.com/Ivanrs297/support-agent/main/infra/setup-github-oidc.sh
+#   INSTANCE_ID=i-0abc... bash setup-github-oidc.sh
+#
+# NOT on the agent host. Its instance profile grants SSM and nothing else, so
+# every IAM call here would come back AccessDenied — and putting administrative
+# credentials on a public-facing box to work around that is exactly the thing
+# this whole OIDC setup exists to avoid.
 #
 # What it creates:
 #   - an OIDC identity provider for token.actions.githubusercontent.com
@@ -20,7 +33,41 @@ INSTANCE_ID="${INSTANCE_ID:?set INSTANCE_ID to the agent host, e.g. INSTANCE_ID=
 ROLE_NAME="${ROLE_NAME:-support-agent-github-deploy}"
 POLICY_NAME="${POLICY_NAME:-support-agent-ssm-deploy}"
 
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+# ---------- 0. Preflight ----------
+# Fail with an explanation rather than `aws: command not found` forty lines in,
+# or halfway through, having created the provider but not the role.
+for cmd in aws jq; do
+  command -v "$cmd" >/dev/null || {
+    cat >&2 <<EOF
+$cmd is not installed.
+
+Run this from AWS CloudShell, which has both and needs no setup:
+  https://us-east-2.console.aws.amazon.com/cloudshell
+
+Do not run it on the agent host: that instance has SSM permissions only, and
+this script needs to create IAM roles.
+EOF
+    exit 1
+  }
+done
+
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || {
+  echo "No usable AWS credentials. In CloudShell they are already there; locally, run 'aws configure'." >&2
+  exit 1
+}
+
+# Check for IAM write access before creating anything, so a permissions problem
+# does not leave the account half-configured.
+if ! aws iam list-open-id-connect-providers >/dev/null 2>&1; then
+  cat >&2 <<EOF
+These credentials cannot read IAM (account $ACCOUNT_ID).
+
+If you are on the EC2 host, that is expected: its instance profile grants SSM
+and nothing more. Run this from CloudShell or another admin session instead.
+EOF
+  exit 1
+fi
+
 PROVIDER_ARN="arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
 
 echo "account:  $ACCOUNT_ID"
