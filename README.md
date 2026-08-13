@@ -118,6 +118,38 @@ The public IP costs more than the instance. That is teaching material, not trivi
 Each version is a [tag](https://github.com/Ivanrs297/support-agent/tags), so the
 project can be read as it was built rather than only as it ended up.
 
+### v5 — Two providers, and the receipt
+
+The agent now runs on **Groq or Amazon Bedrock**, switched per request from the
+interface, and every answer carries a record of how it was produced.
+
+- `GET /providers` reports what this deployment can use and why not the rest.
+  Asking for an unconfigured provider is a `400` naming the missing piece.
+- Bedrock has **no default model id** — access is granted per model in the AWS
+  console, so a shipped default would be wrong for most accounts and wrong only
+  at the first question. It authenticates with a key or, better, with an IAM
+  instance role and no secret at all.
+- Every reply carries a **trace**: provider, model, elapsed time, tokens in and
+  out, estimated cost, and one row per model call and tool call — including the
+  arguments each tool was given. Collapsed to a summary line, expandable to the
+  ledger.
+
+The default Groq model changed to `llama-3.1-8b-instant`, and that was a
+measurement, not a preference. `openai/gpt-oss-120b` answers well but **calls
+tools unreliably over the streaming endpoint** — identical requests failed with
+`tool_use_failed` roughly a third of the time, and streaming is the path the
+browser client uses. The smaller model completed 7 of 7 across both paths at
+about **$0.0001 per exchange** and well under a second. A model that answers
+well and a model that calls tools well are different things; only an end-to-end
+call tells them apart, and only on the transport you actually ship.
+
+Deliberately absent: **no per-step timings**. The trace is reconstructed from the
+messages a run produced, which is what lets the blocking and streaming paths
+report the same shape — the total is measured, the split is not. Also no
+persistence: a trace lives as long as the response that carries it, so there is
+nothing to query later and no history to compare runs against. That gap is the
+evaluation module's subject.
+
 ### v4 — A door, a lock, and a meter
 
 The agent was reachable by anyone who knew the URL, and every request spent money
@@ -183,7 +215,7 @@ until it is needed.
 A guest support assistant for **Hotel Aurora**, a fictional 120-room hotel.
 
 - A ReAct agent built with LangChain and LangGraph, on Groq's
-  `openai/gpt-oss-120b`. The obvious first choice, `llama-3.3-70b-versatile`,
+  `openai/gpt-oss-120b` (changed in v5 — see below). The obvious first choice, `llama-3.3-70b-versatile`,
   fails: it emits `<function=search_hotel_policies {...}</function>` instead of a
   JSON tool call, and Groq rejects it with `tool_use_failed` on roughly half of
   requests. A model that answers well is not necessarily a model that calls tools

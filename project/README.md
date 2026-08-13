@@ -22,6 +22,55 @@ project/
         └── reservations.json
 ```
 
+## Two providers, one agent
+
+The same agent runs on **Groq** or **Amazon Bedrock**, chosen per request rather
+than per deployment — `{"provider": "bedrock", "messages": [...]}`, or the
+buttons in the header of `/ui`. `GET /providers` reports which ones this
+deployment can actually use and why it cannot use the others; asking for one it
+cannot serve is a `400` naming the missing piece, not a `500`.
+
+Bedrock ships with **no default model id**. Access there is granted per model in
+the AWS console, so any id shipped here would be wrong for most accounts — and
+wrong in a way that only appears at the first question. List yours:
+
+```bash
+aws bedrock list-foundation-models --region us-east-2 \
+  --query 'modelSummaries[].modelId' --output text | tr '\t' '\n'
+```
+
+Authentication differs between them, and the difference is the interesting part.
+Groq needs an API key in a file. Bedrock needs either a key
+(`AWS_BEARER_TOKEN_BEDROCK`, which botocore finds on its own) or nothing at all
+— an IAM instance role, where the machine proves who it is and no secret exists
+to leak or rotate. The second is the same idea as the OIDC in the deploy
+pipeline, applied to the runtime.
+
+## What every answer costs
+
+Each reply carries a trace: provider, model, elapsed time, token counts in and
+out, an estimated price, and one entry per model call and tool call with the
+arguments each tool was given. `/chat` returns it as `trace`; `/chat/stream`
+sends it as the last event, after the tokens and the sources.
+
+```
+groq · llama-3.1-8b-instant · 729 ms · 2 model calls · 1,704 tokens
+  1  model   in    780 · out  19  → calls search_hotel_policies
+  2  tool    search_hotel_policies {"query":"pets"} → 308 chars
+  3  model   in    882 · out  22  → answers
+  1,663 in · 41 out · about $0.000086
+```
+
+It is reconstructed from the messages a run produced rather than observed live,
+so the blocking and streaming paths report the same shape. The cost of that
+choice is per-step timings: the total is measured, the split between steps is
+not.
+
+A trace whose only step is a model call that called nothing is the agent
+answering from memory. The interface marks that case in red rather than letting
+it look like every other answer — it is the failure this project exists to make
+visible.
+
 ## Getting in
 
 `/chat` and `/chat/stream` need `Authorization: Bearer $API_TOKEN`. `/health` does

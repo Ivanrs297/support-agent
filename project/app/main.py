@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -87,6 +87,16 @@ class ProviderInfo(BaseModel):
     detail: str = Field(description="The model in use, or why this provider cannot be used.")
 
 
+def _unconfigured(error: ValueError) -> HTTPException:
+    """A provider the caller asked for that this deployment cannot serve.
+
+    400 rather than 500: nothing broke. The request named something that is not
+    configured here, and the detail says which part is missing so the caller can
+    fix it without reading the server's logs.
+    """
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+
+
 @app.get("/health", response_model=Health, tags=["ops"])
 def health() -> Health:
     """Liveness probe. Used by the container healthcheck, so keep it cheap."""
@@ -141,10 +151,13 @@ def ui() -> HTMLResponse:
 )
 async def chat(request: ChatRequest) -> ChatResponse:
     """Answer a guest question and return the complete reply."""
-    result = await agent.run(
-        [m.model_dump() for m in request.messages if m.role != "system"],
-        provider=request.provider,
-    )
+    try:
+        result = await agent.run(
+            [m.model_dump() for m in request.messages],
+            provider=request.provider,
+        )
+    except ValueError as unavailable:
+        raise _unconfigured(unavailable) from unavailable
     return ChatResponse(**result)
 
 
@@ -159,6 +172,14 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     at the start rather than a stall mid-sentence.
     """
     messages = [m.model_dump() for m in request.messages]
+
+    # Resolved before the response starts. A provider this deployment cannot use
+    # is a bad request, not a server fault, and saying so mid-stream would mean
+    # a 200 whose body reports a failure — the shape nothing handles well.
+    try:
+        agent._agent_for(request.provider)
+    except ValueError as unavailable:
+        raise _unconfigured(unavailable) from unavailable
 
     async def events():
         async for event in agent.stream(messages, provider=request.provider):

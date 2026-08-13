@@ -85,6 +85,7 @@ Order of operations when closing a version:
 
 | Tag | Contents |
 |---|---|
+| `v5` | Groq and Bedrock switchable per request, and a per-run trace of steps, tokens and cost. |
 | `v4` | Bearer token, address lockout, per-token and daily rate limits, and a browser interface at `/ui`. |
 | `v3` | Continuous deployment: GitHub Actions builds arm64 images to ghcr and rolls them out over SSM, with automatic rollback. |
 | `v2` | Hotel Aurora support agent: ReAct over Groq, documentation search and reservation lookup, `/chat` and `/chat/stream`. |

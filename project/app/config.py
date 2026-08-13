@@ -59,7 +59,12 @@ def load_settings() -> Settings:
         groq_api_key=_require("GROQ_API_KEY"),
         api_token=_require("API_TOKEN"),
         default_provider=_clean(os.environ.get("DEFAULT_PROVIDER", "groq")),
-        groq_model=_clean(os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")),
+        # llama-3.1-8b-instant rather than a larger model: it answers this
+        # corpus correctly, costs about $0.0001 per exchange, replies in well
+        # under a second, and — unlike openai/gpt-oss-120b — calls tools
+        # reliably over the streaming endpoint, which is the path the browser
+        # client uses. Measured, not assumed.
+        groq_model=_clean(os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")),
         # No default model id. Bedrock requires per-model access to be granted
         # in the console, so any id shipped here would be wrong for most
         # accounts — and wrong in a way that only appears at the first question.
