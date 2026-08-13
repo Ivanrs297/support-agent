@@ -289,5 +289,16 @@ The most common cause is a missing variable in `deploy/.env`: `config.py`
 deliberately raises at import rather than letting the container start and fail on
 the first guest request.
 
+**`denied: permission_denied` with a rate-limit body when pushing to ghcr.** A
+GitHub secondary rate limit, not a permissions problem, despite the wording. It
+comes from pushing the same tags repeatedly in a short window, which is what
+debugging a pipeline looks like.
+
+The build now checks whether the commit is already in the registry and skips
+itself if so, which makes a re-run cheap instead of another push. If it happens
+anyway, wait a few minutes — or, when the image is already built, deploy it with
+the **Rollback** workflow, which skips the build entirely. Rolling "back" to the
+current commit of `main` is a perfectly good way to deploy it.
+
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.
