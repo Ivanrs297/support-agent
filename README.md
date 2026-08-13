@@ -95,6 +95,37 @@ The public IP costs more than the instance. That is teaching material, not trivi
 
 ---
 
+## Versions
+
+Each version is a [tag](https://github.com/Ivanrs297/support-agent/tags), so the
+project can be read as it was built rather than only as it ended up.
+
+### v1 — AWS host with domain and TLS
+
+The machine the agent will live on, and nothing more.
+
+- A `t4g.nano` (Ubuntu 24.04 arm64) in `us-east-2`, provisioned **entirely from
+  user-data**: Docker and Compose v2, 2 GB of swap, the SSM agent, log rotation,
+  weekly image pruning, and a sentinel file at `/var/log/bootstrap-done.log` that
+  is the only reliable way to tell a completed bootstrap from one that died
+  halfway.
+- A FastAPI container — multi-stage build, non-root, healthcheck — behind Caddy,
+  serving `supportagent.lat` and `www` with Let's Encrypt certificates issued and
+  renewed automatically.
+- Images built in CI and pulled from `ghcr.io`. The host never builds: it cannot
+  compile and serve traffic in the same 512 MiB.
+
+Deliberately absent: **there is no agent yet**. The app answers a hello world with
+host details. That is the point — this version proves DNS, the security group, the
+reverse proxy and TLS all work before anything harder is stacked on top. Debugging
+four layers at once through a single symptom ("the browser won't connect") is a
+trap worth not walking into.
+
+Measured footprint: caddy ~25 MiB, api ~33 MiB, leaving ~150 MiB for the agent.
+Running cost, 24/7: ~$8.84/month.
+
+---
+
 ## License
 
 TBD.
