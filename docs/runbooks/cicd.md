@@ -110,6 +110,15 @@ all — it lives only on the host.
 Do this **before** merging the pipeline, or the first deploy arrives at a host
 with nothing to check out.
 
+The instance also needs an IAM instance profile, or nothing can reach it over
+SSM. Launching an instance without one is the default, and the symptom appears
+much later:
+
+```bash
+# in CloudShell
+INSTANCE_ID=i-0123456789abcdef0 bash infra/attach-ssm-profile.sh
+```
+
 ```bash
 ssh agent
 curl -fsSL https://raw.githubusercontent.com/Ivanrs297/support-agent/main/deploy/host-setup.sh | sudo bash
@@ -248,7 +257,18 @@ aws ec2 describe-instances --region us-east-2 --instance-ids i-0123456789abcdef0
 - **Wrong region.** `AWS_REGION` must be where the instance lives. An instance ID
   is meaningless in another region, and the error does not say so.
 - **No instance profile**, or one without `AmazonSSMManagedInstanceCore`. The
-  `Profile` field above is `null` when this is the problem.
+  `Profile` field above is `null` when this is the problem, and it is the most
+  confusing of the four: the agent is installed, running, and reporting
+  `active` — it simply has no credentials to register with, so SSM has never
+  heard of the host. Fix it without stopping the instance:
+
+  ```bash
+  INSTANCE_ID=i-0123456789abcdef0 bash infra/attach-ssm-profile.sh
+  ```
+
+  Note that EC2 attaches an *instance profile*, not a role. The profile is a
+  container that normally carries the same name as the role inside it, which is
+  why the distinction goes unnoticed until something needs it.
 - **The instance is stopped.**
 - **The agent is not running.** `systemctl is-active amazon-ssm-agent` on the
   host. Ubuntu AMIs ship it as a snap, which the bootstrap replaces — see the
