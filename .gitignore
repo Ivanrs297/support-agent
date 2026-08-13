@@ -1,0 +1,41 @@
+# --- Slides: private, they do not live in this repo ---
+slides/
+*.pptx
+*.key
+*.pdf
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.ppk
+id_rsa*
+credentials
+secrets.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Terraform / infra ---
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# --- Data and evaluation artifacts ---
+data/raw/
+*.sqlite
+*.db
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

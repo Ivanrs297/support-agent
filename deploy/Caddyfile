@@ -1,0 +1,4 @@
+supportagent.lat, www.supportagent.lat {
+    encode zstd gzip
+    reverse_proxy api:8000
+}
