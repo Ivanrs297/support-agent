@@ -114,7 +114,11 @@ project can be read as it was built rather than only as it ended up.
 A guest support assistant for **Hotel Aurora**, a fictional 120-room hotel.
 
 - A ReAct agent built with LangChain and LangGraph, on Groq's
-  `llama-3.3-70b-versatile`.
+  `openai/gpt-oss-120b`. The obvious first choice, `llama-3.3-70b-versatile`,
+  fails: it emits `<function=search_hotel_policies {...}</function>` instead of a
+  JSON tool call, and Groq rejects it with `tool_use_failed` on roughly half of
+  requests. A model that answers well is not necessarily a model that calls tools
+  well, and nothing but an end-to-end call reveals the difference.
 - Two tools of deliberately different kinds. `search_hotel_policies` ranks the 28
   sections of the hotel documentation by IDF term overlap and returns prose to
   interpret. `get_reservation` looks up a confirmation code and returns
