@@ -26,12 +26,16 @@ jobs:
           token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
 
-          payload=$(cut -d. -f2 <<< "$token")
-          pad=$(( (4 - ${#payload} % 4) % 4 ))
-          padded="$payload$(printf '=%.0s' $(seq 0 $((pad - 1)) 2>/dev/null) 2>/dev/null || true)"
-          claims=$(tr '_-' '/+' <<< "$padded" | base64 -d 2>/dev/null | jq -c '{sub, aud, repository, repository_owner, ref, event_name}')
+          claims=$(python3 -c '
+import base64, json, sys
+payload = sys.argv[1].split(".")[1]
+payload += "=" * (-len(payload) % 4)          # JWTs drop base64 padding
+data = json.loads(base64.urlsafe_b64decode(payload))
+keys = ("sub", "aud", "repository", "repository_owner", "ref", "event_name")
+print(json.dumps({k: data.get(k) for k in keys}))
+' "$token")
 
-          echo "$claims" | jq .
+          echo "$claims" | python3 -m json.tool
 
           # Emitted as an annotation so it is readable from the checks API
           # without downloading the logs.
