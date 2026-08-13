@@ -39,7 +39,13 @@ per token, and a daily cap across all callers. The first is fairness, the second
 is the bill. Both answer with `429` and a `Retry-After`.
 
 Every counter is in memory. A deploy resets them, and they are correct only
-because one container with one worker serves the site.
+because one container with one worker serves the site. That is also the way out
+of a lockout you inflicted on yourself: `docker compose restart api`.
+
+The address comes from `X-Forwarded-For`, which Caddy overwrites with the real
+client and does not append to — verified, not assumed, because if it appended,
+the first entry would be whatever the caller claimed and the lockout would be one
+header away from useless.
 
 ## How it answers
 

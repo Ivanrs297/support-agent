@@ -349,5 +349,26 @@ request fresh certificates on the next deploy. That is fine — Let's Encrypt
 allows 50 per domain per week — but it is why the padlock takes a few extra
 seconds to appear the first time.
 
+**"Too many failed attempts" and you are the one locked out.** The lockout is
+keyed on the caller's real address — Caddy replaces `X-Forwarded-For` with it and
+discards whatever the client claimed, so it cannot be spoofed, and it also cannot
+be talked around. Every counter is in memory, so a restart clears them all:
+
+```bash
+cd /opt/support-agent/deploy && docker compose restart api
+```
+
+If the token itself is being rejected, compare it without printing it:
+
+```bash
+docker compose exec api python -c \
+  "import os; t=os.environ['API_TOKEN']; print(len(t), repr(t[:3]), repr(t[-3:]))"
+```
+
+`openssl rand -hex 32` gives 64 characters. 66 starting with a quote means the
+value was quoted in `.env` — `env_file` is not a shell and keeps the quote marks.
+65 means a stray space or newline. Both are now stripped on read, but an old
+container still has the old value.
+
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.

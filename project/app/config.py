@@ -24,11 +24,30 @@ class Settings:
 
 
 def _require(name: str) -> str:
-    value = os.environ.get(name, "").strip()
+    value = _clean(os.environ.get(name, ""))
     if not value:
         raise RuntimeError(
             f"{name} is not set. Copy .env.example to .env and fill it in."
         )
+    return value
+
+
+def _clean(value: str) -> str:
+    """Trim whitespace and surrounding quotes from an environment value.
+
+    Compose's `env_file` is not a shell. `API_TOKEN="abc"` there gives you a
+    value with the quote marks in it, and `API_TOKEN=abc ` keeps the trailing
+    space. Either one fails a constant-time comparison against the token a
+    person actually types, and the only symptom is a login that will not work
+    for a reason nothing reports — the secret cannot be printed to compare.
+
+    Quoting a value in a .env file is a habit people bring from shell scripts,
+    so this accepts it rather than punishing it.
+    """
+    value = value.strip()
+    for quote in ('"', "'"):
+        if len(value) >= 2 and value.startswith(quote) and value.endswith(quote):
+            return value[1:-1].strip()
     return value
 
 
