@@ -32,6 +32,16 @@ fi
 
 chown -R "$OWNER:$OWNER" "$TARGET"
 
+# Deploys arrive over SSM, which runs commands as root, while the checkout
+# belongs to ubuntu so a human can work in it over SSH. Git refuses to operate
+# across that ownership boundary — "detected dubious ownership" — unless the
+# path is declared trusted. --system so it holds for every user, not just
+# whichever one happens to run this.
+if ! git config --system --get-all safe.directory 2>/dev/null | grep -qx "$TARGET"; then
+  git config --system --add safe.directory "$TARGET"
+  echo "marked $TARGET as a safe directory for git"
+fi
+
 cd "$TARGET/deploy"
 if [ -f .env ]; then
   echo ".env already present, leaving it alone"

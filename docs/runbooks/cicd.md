@@ -300,5 +300,20 @@ anyway, wait a few minutes — or, when the image is already built, deploy it wi
 the **Rollback** workflow, which skips the build entirely. Rolling "back" to the
 current commit of `main` is a perfectly good way to deploy it.
 
+**`set: Illegal option -o pipefail` in the SSM output.** `AWS-RunShellScript`
+runs its commands with `/bin/sh`, which on Ubuntu is dash. Bash syntax fails
+there — `pipefail`, `[[`, arrays, `local`. The inline commands are kept POSIX
+and everything else lives in `deploy/remote-deploy.sh`, which is invoked with
+`bash` explicitly.
+
+**`detected dubious ownership in repository`.** SSM runs commands as root; the
+checkout at `/opt/support-agent` belongs to `ubuntu` so a human can work in it
+over SSH. Git will not cross that boundary unattended. `host-setup.sh` declares
+the path trusted system-wide; if the message appears anyway, run it directly:
+
+```bash
+sudo git config --system --add safe.directory /opt/support-agent
+```
+
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.
