@@ -107,29 +107,59 @@ all — it lives only on the host.
 
 ### 3.3 The host
 
+Do this **before** merging the pipeline, or the first deploy arrives at a host
+with nothing to check out.
+
 ```bash
 ssh agent
 curl -fsSL https://raw.githubusercontent.com/Ivanrs297/support-agent/main/deploy/host-setup.sh | sudo bash
 sudo -u ubuntu vi /opt/support-agent/deploy/.env    # add GROQ_API_KEY
 ```
 
+**If you already deployed by hand from another directory** — `~/deploy` from the
+v1 lecture — note that Compose names a project after the directory holding the
+compose file. Both are called `deploy`, so both resolve to the same project, the
+same containers and the same `deploy_caddy_data` volume. Bringing the new one up
+replaces the old containers instead of colliding on ports 80 and 443, and the
+Let's Encrypt certificates carry over untouched.
+
+That is convenient, but two checkouts of one project is a trap for whoever
+debugs this next. Once the pipeline works, delete the old one:
+
+```bash
+rm -rf ~/deploy      # after confirming /opt/support-agent/deploy is serving
+```
+
 ### 3.4 Make the ghcr package public
 
 The host pulls without credentials, so the package has to be public. It is
-private by default even when the repository is public, and this is the single
-most common reason a first deploy fails.
+private by default even when the repository is public.
 
-<https://github.com/users/Ivanrs297/packages/container/support-agent/settings> →
-Change visibility → Public.
+**The package does not exist until CI has pushed to it**, so this cannot be done
+in advance. The expected sequence is:
+
+1. Merge the pipeline. `test` and `build` pass, and the build creates the
+   package — private.
+2. `deploy` fails at `pull access denied`.
+3. Change the visibility:
+   <https://github.com/users/Ivanrs297/packages/container/support-agent/settings>
+   → Change visibility → Public.
+4. Actions → the failed run → **Re-run failed jobs**.
+
+One failed deploy on the way in is normal here, and worth seeing once: it is the
+same error a private base image produces in any pipeline.
 
 ### 3.5 Confirm
 
 ```bash
-cd /opt/support-agent/deploy && docker compose up -d && docker compose ps
+cd /opt/support-agent/deploy && docker compose ps
 curl -s https://supportagent.lat/health
+curl -sX POST https://supportagent.lat/chat -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"What time is check-out?"}]}'
 ```
 
-Then merge anything under `project/` and watch the Actions tab.
+The second call is the one that matters. `/health` proves the process is up;
+only a real question proves the agent has its API key and can reach Groq.
 
 ## 4. Rolling back
 
