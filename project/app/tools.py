@@ -178,16 +178,36 @@ def search_hotel_policies(query: str) -> str:
     if not tokens:
         return "Empty query. Provide keywords describing what to look for."
 
-    # "Is there a pool?" carries one content word. Holding it to the same
-    # evidence threshold as a multi-word query rejects it, because "pool" turns
-    # up in four sections and its IDF is correspondingly low. A single-term
-    # question is not ambiguous about what it wants, so any match will do.
+    # A word the corpus has never seen anywhere is the strongest evidence there
+    # is that the guest is asking about something the hotel does not document.
+    # "babysitting", "shuttle", "laundry" appear in no section at all; "pool"
+    # and "cancellation" do.
+    #
+    # So the bar moves with that. A query made entirely of words the
+    # documentation knows only has to match something. A query containing an
+    # unknown word has to clear the full relevance threshold on the rest, which
+    # is what stops "babysitting service" from being answered out of the room
+    # service section on the strength of one common word.
+    #
+    # Without this, the threshold has to be set high enough to reject
+    # "babysitting service", which then also rejects "pool hours" — the pool
+    # section says "open daily from 07:00 to 21:00" and never uses the word
+    # "hours", so only one moderately common term matches.
     content_words = {
         _normalize(w)
         for w in re.findall(r"[a-z0-9]+", query.lower())
         if w not in STOPWORDS
     }
-    threshold = MIN_RELEVANCE if len(content_words) > 1 else 0.0
+    # "swimming pool hours" and "babysitting service" both mix known and unknown
+    # words, so presence alone does not separate them. What does is the balance:
+    # two of the three words in the first are vocabulary the documentation uses,
+    # against one of two in the second.
+    #
+    # Note that IDF cannot separate them either — "pool" and "service" both
+    # appear in four sections and score identically, 1.89. No threshold exists
+    # that keeps one and drops the other.
+    known = sum(word in IDF for word in content_words)
+    threshold = 0.0 if known > len(content_words) - known else MIN_RELEVANCE
 
     scored = sorted(
         ((*_score(tokens, p), p) for p in PASSAGES), key=lambda x: x[0], reverse=True

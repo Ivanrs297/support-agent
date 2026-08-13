@@ -16,6 +16,16 @@ NOT_FOUND = "No section of the hotel documentation matches"
 
 SHOULD_FIND = [
     ("what time is checkout", "Standard times"),
+    # The pool section says "open daily from 07:00 to 21:00" and never uses the
+    # word "hours", so only one moderately common term matches. Production
+    # answered "I don't have that information" to a question the documentation
+    # answers, until the threshold learned to move with how much of the question
+    # the corpus recognises.
+    ("pool hours", "Pool"),
+    ("swimming pool hours", "Pool"),
+    ("what are the pool hours", "Pool"),
+    ("when does the restaurant open", "Restaurant"),
+    ("room service hours", "Room service"),
     ("can I smoke on the balcony", "Smoking"),
     ("pet fee dog", "Pets"),
     ("cancellation deadline", "Cancellation policy"),
@@ -44,6 +54,14 @@ SHOULD_NOT_FIND = [
     "tennis court",
     "currency exchange",
     "do you have a helicopter pad",
+    "is there a nightclub",
+    "scuba diving lessons",
+    # Known gap, named rather than pretended away: "do you rent bicycles"
+    # retrieves the business services section, because the corpus says meeting
+    # rooms "can be rented" and "rent" is rare in it. The passage is at least
+    # adjacent, and the prompt requires the model to say when the answer is not
+    # in what it was handed. Tightening further would fit this list, not the
+    # problem.
 ]
 
 
