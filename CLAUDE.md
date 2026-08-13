@@ -85,6 +85,7 @@ Order of operations when closing a version:
 
 | Tag | Contents |
 |---|---|
+| `v3` | Continuous deployment: GitHub Actions builds arm64 images to ghcr and rolls them out over SSM, with automatic rollback. |
 | `v2` | Hotel Aurora support agent: ReAct over Groq, documentation search and reservation lookup, `/chat` and `/chat/stream`. |
 | `v1` | AWS host provisioned from user-data, custom domain, Caddy with automatic TLS. No agent yet. |
 

@@ -61,17 +61,22 @@ answers and why nothing about the hotel lives in the system prompt.
 
 ## Deploying
 
-The host is provisioned once, with `deploy/bootstrap.sh` as user-data. After that,
-deploying means pulling the new image and recreating the container:
+**Merging to `main` deploys.** A change under `project/` or `deploy/` runs the
+tests, builds an arm64 image, pushes it to `ghcr.io` tagged with the commit SHA,
+and rolls it out to the host over AWS Systems Manager. If the new container does
+not report healthy within 90 seconds, the host restores the previous image by
+itself and the job fails.
 
-```bash
-ssh agent
-cd ~/deploy
-docker compose pull && docker compose up -d
-```
+There is no SSH key in a GitHub secret and no long-lived AWS credential: the
+runner exchanges an OIDC token for a session allowed to run one command on one
+instance. Port 22 stays closed.
 
-The full runbook — including the known bootstrap failures and how to diagnose
-them — is in [`docs/runbooks/aws-agent-host.md`](docs/runbooks/aws-agent-host.md).
+Changes confined to `docs/`, `labs/` or this README deploy nothing.
+
+To roll back, run the **Rollback** workflow with the SHA of a commit that
+deployed cleanly. Setup and failure modes are in
+[`docs/runbooks/cicd.md`](docs/runbooks/cicd.md); the host itself is in
+[`docs/runbooks/aws-agent-host.md`](docs/runbooks/aws-agent-host.md).
 
 ---
 
@@ -108,6 +113,34 @@ The public IP costs more than the instance. That is teaching material, not trivi
 
 Each version is a [tag](https://github.com/Ivanrs297/support-agent/tags), so the
 project can be read as it was built rather than only as it ended up.
+
+### v3 — Continuous deployment
+
+Merging to `main` now reaches the host on its own.
+
+- `deploy.yml`: tests, then an arm64 image built on a Graviton runner and pushed
+  to `ghcr.io` tagged with the commit SHA, then a rollout over `ssm:SendCommand`.
+- Authentication by GitHub OIDC. No SSH key, no AWS access key, no inbound port
+  22. The IAM policy permits one action against one instance ARN.
+- The host verifies its own deploy against the container healthcheck and, on
+  failure, restores the previous image tag before reporting the failure upward.
+- `rollback.yml`: redeploys an earlier SHA on demand, after confirming that image
+  still exists in the registry.
+- Path filters, so editing a lab or a runbook does not restart production.
+
+The image is tagged with the **commit SHA**, and that is what gets deployed;
+`latest` moves too but only for humans reading the registry. Deploying a moving
+tag leaves a rollback with no fixed point to return to.
+
+Deliberately absent: **no staging environment and no smoke test of the actual
+agent.** The healthcheck proves the process is up and serving `/health`, not that
+it answers a guest correctly — an image with a broken system prompt deploys
+green. Closing that needs an evaluation suite, which is a later module's subject.
+
+The three deploy paths were exercised before merging: a successful rollout, an
+image that cannot be pulled, and an image that starts but never becomes healthy.
+The last one is the reason the rollback exists and the one that never gets tested
+until it is needed.
 
 ### v2 — The agent
 

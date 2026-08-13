@@ -35,7 +35,8 @@ sysctl -p /etc/sysctl.d/99-swap.conf
 # ---------- Docker ----------
 # Compose v2 is a separate package on Ubuntu. Without it you get
 # "unknown shorthand flag: 'd'" on the first `docker compose up -d`.
-apt-get install -y docker.io docker-compose-v2
+# git is needed by the deploy: the host checks out the commit being released.
+apt-get install -y docker.io docker-compose-v2 git
 systemctl enable --now docker
 usermod -aG docker ubuntu
 cat > /etc/docker/daemon.json <<'EOF'
