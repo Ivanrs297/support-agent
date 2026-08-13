@@ -79,9 +79,9 @@ async def run(messages: list[dict]) -> dict:
     history = result["messages"]
     reply = next(
         (
-            m.text()
+            m.text
             for m in reversed(history)
-            if isinstance(m, AIMessage) and m.text().strip()
+            if isinstance(m, AIMessage) and m.text.strip()
         ),
         "",
     )
@@ -99,6 +99,6 @@ async def stream(messages: list[dict]) -> AsyncIterator[str]:
         {"messages": messages}, stream_mode="messages"
     ):
         if isinstance(chunk, AIMessage) and not chunk.tool_calls:
-            text = chunk.text()
+            text = chunk.text
             if text:
                 yield text

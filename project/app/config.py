@@ -30,7 +30,7 @@ def _require(name: str) -> str:
 def load_settings() -> Settings:
     return Settings(
         groq_api_key=_require("GROQ_API_KEY"),
-        model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
         temperature=float(os.environ.get("GROQ_TEMPERATURE", "0.2")),
         max_doc_results=int(os.environ.get("MAX_DOC_RESULTS", "3")),
         request_timeout=float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "60")),
