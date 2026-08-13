@@ -9,12 +9,13 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import agent
-from .config import settings
+from . import config
+from .providers import available_providers
 from .security import enforce_rate_limit, require_token
 
 app = FastAPI(
@@ -43,6 +44,10 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    provider: Literal["groq", "bedrock"] | None = Field(
+        default=None,
+        description="Which model provider to answer with. Defaults to DEFAULT_PROVIDER.",
+    )
     messages: list[Message] = Field(
         min_length=1,
         description="The conversation so far, oldest first. The last message must be from the guest.",
@@ -54,6 +59,13 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    trace: dict = Field(
+        description=(
+            "What the run cost and how it got there: provider, model, elapsed "
+            "milliseconds, token counts, an estimated price, and one entry per "
+            "model call and tool call."
+        )
+    )
     sources: list[str] = Field(
         description=(
             "Tools the agent consulted before answering. An empty list means it "
@@ -64,13 +76,35 @@ class ChatResponse(BaseModel):
 
 class Health(BaseModel):
     status: str
+    provider: str
     model: str
+
+
+class ProviderInfo(BaseModel):
+    name: str
+    model: str
+    available: bool
+    detail: str = Field(description="The model in use, or why this provider cannot be used.")
+
+
+def _unconfigured(error: ValueError) -> HTTPException:
+    """A provider the caller asked for that this deployment cannot serve.
+
+    400 rather than 500: nothing broke. The request named something that is not
+    configured here, and the detail says which part is missing so the caller can
+    fix it without reading the server's logs.
+    """
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
 
 
 @app.get("/health", response_model=Health, tags=["ops"])
 def health() -> Health:
     """Liveness probe. Used by the container healthcheck, so keep it cheap."""
-    return Health(status="ok", model=settings.model)
+    return Health(
+        status="ok",
+        provider=config.settings.default_provider,
+        model=config.settings.groq_model,
+    )
 
 
 @app.get(
@@ -87,9 +121,20 @@ def session() -> dict[str, str | int]:
     """
     return {
         "status": "authenticated",
-        "requests_per_minute": settings.rate_limit_per_minute,
-        "daily_cap": settings.daily_request_cap,
+        "requests_per_minute": config.settings.rate_limit_per_minute,
+        "daily_cap": config.settings.daily_request_cap,
     }
+
+
+@app.get("/providers", response_model=list[ProviderInfo], tags=["ops"])
+def providers() -> list[ProviderInfo]:
+    """Which providers this deployment can answer with, and why not the others.
+
+    Unauthenticated on purpose: it exposes model names and configuration state,
+    not secrets, and the browser client needs it to render the switch before
+    anyone has typed a token.
+    """
+    return [ProviderInfo(**p.__dict__) for p in available_providers()]
 
 
 @app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
@@ -106,7 +151,13 @@ def ui() -> HTMLResponse:
 )
 async def chat(request: ChatRequest) -> ChatResponse:
     """Answer a guest question and return the complete reply."""
-    result = await agent.run([m.model_dump() for m in request.messages])
+    try:
+        result = await agent.run(
+            [m.model_dump() for m in request.messages],
+            provider=request.provider,
+        )
+    except ValueError as unavailable:
+        raise _unconfigured(unavailable) from unavailable
     return ChatResponse(**result)
 
 
@@ -116,13 +167,22 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
     Each event carries a JSON object. `{"token": "..."}` while the reply is being
     written, then `{"sources": [...]}` naming the tools it came from, then
+    `{"trace": {...}}` with timings, token counts and every step, then
     `{"done": true}`. Tool calls happen before the first token, so expect a pause
     at the start rather than a stall mid-sentence.
     """
     messages = [m.model_dump() for m in request.messages]
 
+    # Resolved before the response starts. A provider this deployment cannot use
+    # is a bad request, not a server fault, and saying so mid-stream would mean
+    # a 200 whose body reports a failure — the shape nothing handles well.
+    try:
+        agent._agent_for(request.provider)
+    except ValueError as unavailable:
+        raise _unconfigured(unavailable) from unavailable
+
     async def events():
-        async for event in agent.stream(messages):
+        async for event in agent.stream(messages, provider=request.provider):
             yield f"data: {json.dumps(event)}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 

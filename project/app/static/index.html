@@ -209,6 +209,70 @@
   .composer { max-width: var(--measure); margin: 0 auto; display: flex; gap: .6rem; align-items: flex-end; }
   .composer textarea { resize: none; max-height: 8rem; }
   .status { max-width: var(--measure); margin: .5rem auto 0; font-size: .85rem; color: var(--alarm); min-height: 1.2em; }
+
+  /* ---------- provenance and trace ---------- */
+
+  .meta { margin-top: .7rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+  details.trace { margin-top: .6rem; width: 100%; }
+  details.trace > summary {
+    cursor: pointer;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    color: var(--mist-quiet);
+    font-size: .74rem;
+    letter-spacing: .04em;
+  }
+  details.trace > summary::-webkit-details-marker { display: none; }
+  details.trace > summary::before { content: "▸"; color: var(--brass); font-size: .7rem; }
+  details.trace[open] > summary::before { content: "▾"; }
+  details.trace > summary:hover { color: var(--brass); }
+
+  /* The steps read as a ledger, not a chat: fixed columns, monospace numbers,
+     one row per thing that happened. */
+  .steps {
+    margin-top: .6rem;
+    border-left: 2px solid var(--ink-line);
+    padding-left: .9rem;
+    font-size: .76rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--mist-quiet);
+  }
+  .step { display: grid; grid-template-columns: 1.4rem 3.2rem 1fr; gap: .5rem; padding: .25rem 0; }
+  .step .n { color: var(--brass-dim); }
+  .step .kind { color: var(--brass); }
+  .step .body { overflow-wrap: anywhere; }
+  .step .args { color: var(--mist); }
+  .step.none .body { color: var(--alarm); }
+  .totals {
+    margin-top: .5rem; padding-top: .5rem;
+    border-top: 1px solid var(--ink-line);
+    font-size: .72rem; color: var(--mist-quiet);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* ---------- provider switch ---------- */
+
+  .providers { display: flex; gap: .3rem; }
+  .providers button {
+    background: transparent;
+    color: var(--mist-quiet);
+    border: 1px solid var(--ink-line);
+    border-radius: 999px;
+    padding: .2rem .7rem;
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .providers button[aria-pressed="true"] {
+    border-color: var(--brass);
+    color: var(--brass);
+  }
+  .providers button:disabled { opacity: .35; cursor: not-allowed; }
+  .providers button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--mist); background: transparent; }
 </style>
 </head>
 <body>
@@ -241,6 +305,7 @@
     <span class="lamp" aria-hidden="true"></span>
     <span class="plate">Hotel Aurora · Front desk</span>
     <span class="spacer"></span>
+    <span class="providers" id="providers" role="group" aria-label="Model provider"></span>
     <span class="quota" id="quota"></span>
   </header>
 
@@ -285,6 +350,7 @@
   let token = store.getItem("aurora-token") || "";
   let messages = [];
   let busy = false;
+  let provider = null;   // null = let the server use its configured default
 
   const authHeader = () => ({ "Authorization": "Bearer " + token });
 
@@ -326,12 +392,53 @@
       $("quota").textContent =
         `${info.requests_per_minute}/min · ${info.daily_cap}/day`;
       store.setItem("aurora-token", token);
+      loadProviders();
       open();
     } catch {
       gateNotice.textContent = "Could not reach the front desk. Check your connection.";
       button.disabled = false;
     }
   });
+
+  // The switch is populated from the server, not hardcoded: which providers a
+  // deployment can actually use depends on its configuration, and a button that
+  // cannot work should say why rather than fail on click.
+  async function loadProviders() {
+    let list;
+    try {
+      const res = await fetch("/providers");
+      if (!res.ok) return;
+      list = await res.json();
+    } catch { return; }
+
+    const box = $("providers");
+    box.replaceChildren();
+    for (const p of list) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = p.name;
+      button.disabled = !p.available;
+      button.title = p.available ? p.detail : `Unavailable: ${p.detail}`;
+      button.setAttribute("aria-pressed", String(provider === p.name));
+      button.addEventListener("click", () => {
+        provider = p.name;
+        for (const other of box.children) {
+          other.setAttribute("aria-pressed", String(other.textContent === p.name));
+        }
+      });
+      box.append(button);
+    }
+    // Reflect the server's default so the header is never ambiguous about
+    // which provider an answer came from.
+    if (!provider) {
+      const first = list.find((p) => p.available);
+      if (first) {
+        provider = first.name;
+        const match = [...box.children].find((b) => b.textContent === first.name);
+        match?.setAttribute("aria-pressed", "true");
+      }
+    }
+  }
 
   function open() {
     card.classList.add("accepted");
@@ -361,13 +468,84 @@
     return said;
   }
 
-  function tag(said, sources) {
-    const el = document.createElement("span");
-    el.className = "checked" + (sources.length ? "" : " none");
-    el.textContent = sources.length
+  function tag(said, sources, trace) {
+    const row = document.createElement("div");
+    row.className = "meta";
+
+    const checked = document.createElement("span");
+    checked.className = "checked" + (sources.length ? "" : " none");
+    checked.textContent = sources.length
       ? "Checked " + sources.map(niceName).join(" and ")
       : "Answered without checking";
-    said.after(el);
+    row.append(checked);
+    said.after(row);
+
+    if (trace) row.after(tracePanel(trace));
+  }
+
+  const ms = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + " s" : n + " ms");
+  const num = (n) => n.toLocaleString();
+
+  // The summary line is always visible; the ledger is one click away. Someone
+  // reading an answer should see what it cost without being made to read how
+  // it was reached — but never have to leave the page to find out.
+  function tracePanel(trace) {
+    const details = document.createElement("details");
+    details.className = "trace";
+
+    const summary = document.createElement("summary");
+    const tokens = trace.input_tokens + trace.output_tokens;
+    summary.textContent =
+      `${trace.provider} · ${trace.model} · ${ms(trace.ms)} · ` +
+      `${trace.model_calls} model call${trace.model_calls === 1 ? "" : "s"} · ${num(tokens)} tokens`;
+    details.append(summary);
+
+    const steps = document.createElement("div");
+    steps.className = "steps";
+    trace.steps.forEach((step, i) => {
+      const row = document.createElement("div");
+      row.className = "step";
+
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = i + 1;
+
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = step.kind;
+
+      const body = document.createElement("span");
+      body.className = "body";
+
+      if (step.kind === "model") {
+        body.textContent =
+          `in ${num(step.input_tokens)} · out ${num(step.output_tokens)}` +
+          (step.tool_calls.length ? ` → calls ${step.tool_calls.join(", ")}` : " → answers");
+        // A first-and-only model step that called nothing is the agent
+        // speaking from memory. Mark it; that is the failure worth seeing.
+        if (!step.tool_calls.length && trace.steps.length === 1) row.classList.add("none");
+      } else {
+        const args = document.createElement("span");
+        args.className = "args";
+        args.textContent = JSON.stringify(step.args);
+        body.append(step.name + " ", args, ` → ${num(step.result_chars)} chars`);
+      }
+
+      row.append(n, kind, body);
+      steps.append(row);
+    });
+    details.append(steps);
+
+    const totals = document.createElement("div");
+    totals.className = "totals";
+    const cost =
+      trace.cost_usd === null || trace.cost_usd === undefined
+        ? "cost unknown for this model"
+        : `about $${trace.cost_usd.toFixed(6)}`;
+    totals.textContent = `${num(trace.input_tokens)} in · ${num(trace.output_tokens)} out · ${cost}`;
+    details.append(totals);
+
+    return details;
   }
 
   const niceName = (tool) => ({
@@ -391,7 +569,7 @@
       const res = await fetch("/chat/stream", {
         method: "POST",
         headers: { ...authHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ messages, provider }),
       });
 
       if (!res.ok) {
@@ -407,7 +585,7 @@
       // and keep whatever tail has not been terminated yet.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "", answer = "", sources = [];
+      let buffer = "", answer = "", sources = [], trace = null;
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -425,13 +603,15 @@
             thread.scrollTop = thread.scrollHeight;
           } else if (payload.sources) {
             sources = payload.sources;
+          } else if (payload.trace) {
+            trace = payload.trace;
           }
         }
       }
 
       said.classList.remove("caret");
       messages.push({ role: "assistant", content: answer });
-      tag(said, sources);
+      tag(said, sources, trace);
     } catch {
       said.classList.remove("caret");
       status.textContent = "The connection dropped mid-answer. Ask again.";
