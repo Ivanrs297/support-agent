@@ -68,7 +68,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Re-running a workflow rebuilds and re-pushes tags that already exist,
+      # and ghcr answers a burst of those with a secondary rate limit — a 403
+      # that reads like a permissions problem and is not one. A commit maps to
+      # exactly one image, so if the tag is there, there is nothing to build.
+      - name: Is this commit already in the registry?
+        id: existing
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+          if curl -fsSL -o /dev/null \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${repo}/manifests/${GITHUB_SHA}"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "${GITHUB_SHA} is already pushed; skipping the build"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push
+        if: steps.existing.outputs.found != 'true'
         uses: docker/build-push-action@v6
         with:
           context: project
@@ -108,6 +129,32 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: deploy-${{ github.run_id }}
 
+      # SendCommand answers a stopped instance, a wrong region and an unregistered
+      # SSM agent with the same opaque InvalidInstanceId. Ask first, so the log
+      # says which one it is.
+      - name: Check the host is registered with SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          echo "looking for $INSTANCE_ID in ${AWS_REGION}"
+
+          info=$(aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query 'InstanceInformationList[0]' --output json)
+
+          if [ "$info" = "null" ]; then
+            echo "::error::$INSTANCE_ID is not a managed instance in ${AWS_REGION}. Check that AWS_REGION matches where the instance lives, that it is running, that it has an instance profile with AmazonSSMManagedInstanceCore, and that amazon-ssm-agent is active on the host."
+            exit 1
+          fi
+
+          jq -r '"agent \(.AgentVersion) on \(.PlatformName) \(.PlatformVersion), ping \(.PingStatus), last seen \(.LastPingDateTime)"' <<< "$info"
+
+          [ "$(jq -r .PingStatus <<< "$info")" = "Online" ] || {
+            echo "::error::The SSM agent last reported $(jq -r .PingStatus <<< "$info"). The host is registered but not talking to SSM right now."
+            exit 1
+          }
+
       # No SSH key, no open port 22, no long-lived AWS credentials. The runner
       # exchanges its OIDC token for a session that may run one command on one
       # instance, and the instance talks outbound to SSM.
@@ -124,7 +171,11 @@ jobs:
             --comment "deploy ${SHA::7}" \
             --parameters "$(jq -n --arg sha "$SHA" '{
               commands: [
-                "set -euo pipefail",
+                # AWS-RunShellScript runs this with /bin/sh, which on Ubuntu is
+                # dash: `set -o pipefail` is a bashism and aborts the whole
+                # script with "Illegal option". Anything needing bash goes in
+                # remote-deploy.sh, which is invoked with bash on purpose.
+                "set -eu",
                 "cd /opt/support-agent",
                 "git fetch --quiet origin main",
                 "git checkout --quiet --force \($sha)",

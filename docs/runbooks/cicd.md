@@ -110,6 +110,15 @@ all — it lives only on the host.
 Do this **before** merging the pipeline, or the first deploy arrives at a host
 with nothing to check out.
 
+The instance also needs an IAM instance profile, or nothing can reach it over
+SSM. Launching an instance without one is the default, and the symptom appears
+much later:
+
+```bash
+# in CloudShell
+INSTANCE_ID=i-0123456789abcdef0 bash infra/attach-ssm-profile.sh
+```
+
 ```bash
 ssh agent
 curl -fsSL https://raw.githubusercontent.com/Ivanrs297/support-agent/main/deploy/host-setup.sh | sudo bash
@@ -229,9 +238,44 @@ steps:
 
 Comparing those two outputs settles any trust policy question in one run.
 
-**`InvalidInstanceId` from SSM.** The instance is not registered with SSM — check
-`systemctl is-active amazon-ssm-agent` on the host. Note that the Ubuntu AMI
-ships the agent as a snap; see the provisioning runbook for why that matters.
+**`InvalidInstanceId` — "Instances not in a valid state for account".** SSM
+returns this whenever it cannot find the instance as a *managed instance* in the
+region the command was sent to. Four different problems share the one message:
+
+```bash
+# Is it registered, and where?
+aws ssm describe-instance-information --region us-east-2 \
+  --query 'InstanceInformationList[].{Id:InstanceId,Ping:PingStatus,Agent:AgentVersion}' \
+  --output table
+
+# Is it running, and does it have an instance profile?
+aws ec2 describe-instances --region us-east-2 --instance-ids i-0123456789abcdef0 \
+  --query 'Reservations[].Instances[].{State:State.Name,Profile:IamInstanceProfile.Arn}' \
+  --output json
+```
+
+- **Wrong region.** `AWS_REGION` must be where the instance lives. An instance ID
+  is meaningless in another region, and the error does not say so.
+- **No instance profile**, or one without `AmazonSSMManagedInstanceCore`. The
+  `Profile` field above is `null` when this is the problem, and it is the most
+  confusing of the four: the agent is installed, running, and reporting
+  `active` — it simply has no credentials to register with, so SSM has never
+  heard of the host. Fix it without stopping the instance:
+
+  ```bash
+  INSTANCE_ID=i-0123456789abcdef0 bash infra/attach-ssm-profile.sh
+  ```
+
+  Note that EC2 attaches an *instance profile*, not a role. The profile is a
+  container that normally carries the same name as the role inside it, which is
+  why the distinction goes unnoticed until something needs it.
+- **The instance is stopped.**
+- **The agent is not running.** `systemctl is-active amazon-ssm-agent` on the
+  host. Ubuntu AMIs ship it as a snap, which the bootstrap replaces — see the
+  provisioning runbook for why that matters.
+
+The deploy job checks this before sending anything, so the log names the actual
+cause rather than repeating the opaque error.
 
 **The container never becomes healthy.** The host has already rolled back, so
 production is up on the previous image. Read the SSM output in the job log, then
@@ -244,6 +288,32 @@ docker run --rm -p 8000:8000 --env-file project/.env ghcr.io/ivanrs297/support-a
 The most common cause is a missing variable in `deploy/.env`: `config.py`
 deliberately raises at import rather than letting the container start and fail on
 the first guest request.
+
+**`denied: permission_denied` with a rate-limit body when pushing to ghcr.** A
+GitHub secondary rate limit, not a permissions problem, despite the wording. It
+comes from pushing the same tags repeatedly in a short window, which is what
+debugging a pipeline looks like.
+
+The build now checks whether the commit is already in the registry and skips
+itself if so, which makes a re-run cheap instead of another push. If it happens
+anyway, wait a few minutes — or, when the image is already built, deploy it with
+the **Rollback** workflow, which skips the build entirely. Rolling "back" to the
+current commit of `main` is a perfectly good way to deploy it.
+
+**`set: Illegal option -o pipefail` in the SSM output.** `AWS-RunShellScript`
+runs its commands with `/bin/sh`, which on Ubuntu is dash. Bash syntax fails
+there — `pipefail`, `[[`, arrays, `local`. The inline commands are kept POSIX
+and everything else lives in `deploy/remote-deploy.sh`, which is invoked with
+`bash` explicitly.
+
+**`detected dubious ownership in repository`.** SSM runs commands as root; the
+checkout at `/opt/support-agent` belongs to `ubuntu` so a human can work in it
+over SSH. Git will not cross that boundary unattended. `host-setup.sh` declares
+the path trusted system-wide; if the message appears anyway, run it directly:
+
+```bash
+sudo git config --system --add safe.directory /opt/support-agent
+```
 
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.

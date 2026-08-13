@@ -79,7 +79,11 @@ jobs:
             --comment "rollback to ${SHA::7}" \
             --parameters "$(jq -n --arg sha "$SHA" '{
               commands: [
-                "set -euo pipefail",
+                # AWS-RunShellScript runs this with /bin/sh, which on Ubuntu is
+                # dash: `set -o pipefail` is a bashism and aborts the whole
+                # script with "Illegal option". Anything needing bash goes in
+                # remote-deploy.sh, which is invoked with bash on purpose.
+                "set -eu",
                 "cd /opt/support-agent",
                 "git fetch --quiet origin main",
                 "git checkout --quiet --force \($sha)",
