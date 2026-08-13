@@ -26,7 +26,19 @@ jobs:
   rollback:
     name: Roll back to a previous build
     runs-on: ubuntu-latest
-    environment: production
+    # No `environment:` here, deliberately. Referencing a GitHub Environment
+    # rewrites the OIDC token's subject claim from
+    #   repo:<owner>/<repo>:ref:refs/heads/main
+    # to
+    #   repo:<owner>/<repo>:environment:<name>
+    # and the IAM trust policy pins the first form, so STS refuses the exchange
+    # with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+    #
+    # Keeping the branch as the boundary means one place decides who may deploy:
+    # the trust policy. Adding an environment later, for approval gates, means
+    # changing infra/setup-github-oidc.sh to match on the environment form AND
+    # restricting that environment's deployment branches to main — otherwise any
+    # branch referencing it inherits the same subject.
     steps:
       - name: Check the image exists before touching the host
         env:
