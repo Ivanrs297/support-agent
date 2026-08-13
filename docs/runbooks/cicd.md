@@ -370,5 +370,30 @@ value was quoted in `.env` — `env_file` is not a shell and keeps the quote mar
 65 means a stray space or newline. Both are now stripped on read, but an old
 container still has the old value.
 
+**A setting changed in `.env` but the container ignores it.** `docker compose
+restart` reuses the existing container, and environment is resolved when a
+container is *created*, not when it starts. Use `up -d`, which reconciles the
+running container against its declared configuration and recreates it when the
+`env_file` changed:
+
+```bash
+cd /opt/support-agent/deploy && docker compose up -d
+```
+
+To see what the container actually has, without printing the secrets:
+
+```bash
+docker compose exec api python -c \
+  "import os; print(sorted(k for k in os.environ if k.startswith(('BEDROCK','AWS','GROQ','DEFAULT'))))"
+```
+
+**"The connection dropped mid-answer" in the browser.** The streamed endpoint
+sends its 200 before the first token, so a failure after that point cannot be an
+HTTP status — the stream simply ends. It now emits an `{"error": "..."}` event
+instead, and the interface shows it. The most common cause is a `BEDROCK_MODEL_ID`
+that does not exist: Bedrock ids carry a version suffix (`openai.gpt-oss-20b-1:0`,
+not `openai.gpt-oss-20b`), and an invalid one fails at the first question rather
+than at startup.
+
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.

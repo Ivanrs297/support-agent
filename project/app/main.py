@@ -182,8 +182,16 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         raise _unconfigured(unavailable) from unavailable
 
     async def events():
-        async for event in agent.stream(messages, provider=request.provider):
-            yield f"data: {json.dumps(event)}\n\n"
+        # A failure here cannot be an HTTP status: the 200 and its headers left
+        # before the first token did. Without an explicit event the stream just
+        # stops, and every cause — an invalid model id, a revoked credential, a
+        # provider outage — looks identical to a dropped connection. Say what
+        # happened instead.
+        try:
+            async for event in agent.stream(messages, provider=request.provider):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as failure:  # noqa: BLE001 — reported, not swallowed
+            yield f"data: {json.dumps({'error': f'{type(failure).__name__}: {failure}'})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(

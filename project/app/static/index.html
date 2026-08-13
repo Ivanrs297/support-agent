@@ -585,7 +585,7 @@
       // and keep whatever tail has not been terminated yet.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "", answer = "", sources = [], trace = null;
+      let buffer = "", answer = "", sources = [], trace = null, failure = null;
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -605,11 +605,23 @@
             sources = payload.sources;
           } else if (payload.trace) {
             trace = payload.trace;
+          } else if (payload.error) {
+            // The server could not report this as a status code — the response
+            // had already started. Show what it said rather than a shrug.
+            failure = payload.error;
           }
         }
       }
 
       said.classList.remove("caret");
+
+      if (failure) {
+        said.textContent = answer || "—";
+        status.textContent = failure;
+        messages.pop();
+        return;
+      }
+
       messages.push({ role: "assistant", content: answer });
       tag(said, sources, trace);
     } catch {
