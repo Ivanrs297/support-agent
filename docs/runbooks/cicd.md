@@ -176,10 +176,27 @@ or the next merge will quietly redeploy the broken commit.
 
 **`pull access denied` in the SSM output.** The ghcr package is private. See 3.4.
 
-**The deploy job fails at "Assume the deploy role".** The trust policy did not
-match. It is pinned to `repo:<owner>/<repo>:ref:refs/heads/main`; a run from a
-branch or a fork will not match, by design. Re-run `infra/setup-github-oidc.sh`
-if the repository was renamed.
+**`Not authorized to perform sts:AssumeRoleWithWebIdentity`.** The subject claim
+in the OIDC token did not match the trust policy, which is pinned to
+`repo:<owner>/<repo>:ref:refs/heads/main`.
+
+Three things produce that claim mismatch:
+
+- The run is not on `main`. Working as intended — a fork or a feature branch
+  cannot deploy.
+- The job declares `environment:`. This is the surprising one: referencing a
+  GitHub Environment **rewrites** the subject to
+  `repo:<owner>/<repo>:environment:<name>`, dropping the branch entirely. The
+  workflows here deliberately declare no environment.
+- The repository was renamed, so the policy names a repository that no longer
+  exists. Re-run `infra/setup-github-oidc.sh`.
+
+To see what the token actually claimed, compare against the policy:
+
+```bash
+aws iam get-role --role-name support-agent-github-deploy \
+  --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition' --output json
+```
 
 **`InvalidInstanceId` from SSM.** The instance is not registered with SSM — check
 `systemctl is-active amazon-ssm-agent` on the host. Note that the Ubuntu AMI
