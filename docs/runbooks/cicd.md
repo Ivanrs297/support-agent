@@ -180,7 +180,23 @@ or the next merge will quietly redeploy the broken commit.
 in the OIDC token did not match the trust policy, which is pinned to
 `repo:<owner>/<repo>:ref:refs/heads/main`.
 
-Three things produce that claim mismatch:
+First, know that the claim has two possible shapes:
+
+```
+classic     repo:OWNER/NAME:ref:refs/heads/main
+immutable   repo:OWNER@26337972/NAME@1333052500:ref:refs/heads/main
+```
+
+The immutable form carries the numeric owner and repository IDs, so that a
+repository deleted and recreated under the same name does not inherit the old
+one's deploy rights — names can be reused, IDs cannot. GitHub decides which form
+it emits; `setup-github-oidc.sh` reads the IDs from the API and allows both.
+
+A trust policy written by hand against the classic form fails against a
+repository emitting the immutable one, with no hint in the error that the shape
+is what differs.
+
+Beyond that, three things produce a mismatch:
 
 - The run is not on `main`. Working as intended — a fork or a feature branch
   cannot deploy.
@@ -191,12 +207,27 @@ Three things produce that claim mismatch:
 - The repository was renamed, so the policy names a repository that no longer
   exists. Re-run `infra/setup-github-oidc.sh`.
 
-To see what the token actually claimed, compare against the policy:
+To see the policy:
 
 ```bash
 aws iam get-role --role-name support-agent-github-deploy \
   --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition' --output json
 ```
+
+To see what the runner actually claims, rather than what it ought to, add a job
+that decodes its own token. Print the claims, never the token — it is a real
+bearer credential:
+
+```yaml
+permissions: { id-token: write }
+steps:
+  - run: |
+      token=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+        "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+      cut -d. -f2 <<< "$token" | base64 -d 2>/dev/null | jq '{sub, aud}'
+```
+
+Comparing those two outputs settles any trust policy question in one run.
 
 **`InvalidInstanceId` from SSM.** The instance is not registered with SSM — check
 `systemctl is-active amazon-ssm-agent` on the host. Note that the Ubuntu AMI
