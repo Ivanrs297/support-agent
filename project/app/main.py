@@ -6,14 +6,16 @@ which is exactly what a deploy does.
 """
 
 import json
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import agent
 from .config import settings
+from .security import enforce_rate_limit, require_token
 
 app = FastAPI(
     title="Hotel Aurora — Support Agent",
@@ -22,9 +24,17 @@ app = FastAPI(
         "A guest support assistant for a fictional hotel, built as a ReAct agent "
         "over two tools: a keyword search across the hotel's documentation, and a "
         "reservation lookup by confirmation code.\n\n"
-        "The API keeps no state. Send the full conversation with every request."
+        "The API keeps no state. Send the full conversation with every request.\n\n"
+        "`/chat` and `/chat/stream` require a bearer token: "
+        "`Authorization: Bearer <API_TOKEN>`. Five wrong tokens from one address "
+        "lock it out temporarily. Accepted requests are rate limited per token "
+        "and against a daily cap, because each one spends money at the model "
+        "provider.\n\n"
+        "A browser interface for all of this is at [/ui](/ui)."
     ),
 )
+
+UI_PAGE = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
 
 
 class Message(BaseModel):
@@ -63,26 +73,57 @@ def health() -> Health:
     return Health(status="ok", model=settings.model)
 
 
-@app.post("/chat", response_model=ChatResponse, tags=["chat"])
+@app.get(
+    "/session",
+    tags=["ops"],
+    dependencies=[Depends(require_token)],
+    summary="Check a token without spending anything",
+)
+def session() -> dict[str, str | int]:
+    """Validate a token. Costs no model call and no quota.
+
+    The browser client calls this before it will accept a question, so that a
+    mistyped token fails immediately rather than after a round trip to Groq.
+    """
+    return {
+        "status": "authenticated",
+        "requests_per_minute": settings.rate_limit_per_minute,
+        "daily_cap": settings.daily_request_cap,
+    }
+
+
+@app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
+def ui() -> HTMLResponse:
+    """The browser client. One file, no build step, no second deployment."""
+    return HTMLResponse(UI_PAGE)
+
+
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    tags=["chat"],
+    dependencies=[Depends(enforce_rate_limit)],
+)
 async def chat(request: ChatRequest) -> ChatResponse:
     """Answer a guest question and return the complete reply."""
     result = await agent.run([m.model_dump() for m in request.messages])
     return ChatResponse(**result)
 
 
-@app.post("/chat/stream", tags=["chat"])
+@app.post("/chat/stream", tags=["chat"], dependencies=[Depends(enforce_rate_limit)])
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
     """Answer a guest question, streaming the reply as server-sent events.
 
-    Each event carries a JSON object: `{"token": "..."}` while the reply is being
-    written, then a final `{"done": true}`. Tool calls happen before the first
-    token, so expect a pause at the start rather than a stall mid-sentence.
+    Each event carries a JSON object. `{"token": "..."}` while the reply is being
+    written, then `{"sources": [...]}` naming the tools it came from, then
+    `{"done": true}`. Tool calls happen before the first token, so expect a pause
+    at the start rather than a stall mid-sentence.
     """
     messages = [m.model_dump() for m in request.messages]
 
     async def events():
-        async for token in agent.stream(messages):
-            yield f"data: {json.dumps({'token': token})}\n\n"
+        async for event in agent.stream(messages):
+            yield f"data: {json.dumps(event)}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 
     return StreamingResponse(

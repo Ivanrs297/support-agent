@@ -88,17 +88,28 @@ async def run(messages: list[dict]) -> dict:
     return {"reply": reply, "sources": _sources(history)}
 
 
-async def stream(messages: list[dict]) -> AsyncIterator[str]:
-    """Yield the reply token by token as the model produces it.
+async def stream(messages: list[dict]) -> AsyncIterator[dict]:
+    """Yield the reply as it is written, then the tools it came from.
 
     Only tokens from the final answer are emitted. The intermediate turns that
     decide which tool to call are part of the machinery, not the answer, and
     streaming them would show the guest the agent thinking out loud.
+
+    The tools consulted arrive last, as a single event, because they are not
+    known until the run finishes. Sending them down this stream rather than
+    letting the caller ask afterwards matters: a second request would mean a
+    second conversation with the model, doubling both the bill and the latency
+    to display one line of provenance.
     """
+    sources: list[str] = []
     async for chunk, _metadata in agent.astream(
         {"messages": messages}, stream_mode="messages"
     ):
-        if isinstance(chunk, AIMessage) and not chunk.tool_calls:
+        if isinstance(chunk, ToolMessage):
+            if chunk.name and chunk.name not in sources:
+                sources.append(chunk.name)
+        elif isinstance(chunk, AIMessage) and not chunk.tool_calls:
             text = chunk.text
             if text:
-                yield text
+                yield {"token": text}
+    yield {"sources": sources}

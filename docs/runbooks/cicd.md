@@ -277,6 +277,21 @@ aws ec2 describe-instances --region us-east-2 --instance-ids i-0123456789abcdef0
 The deploy job checks this before sending anything, so the log names the actual
 cause rather than repeating the opaque error.
 
+**The container never becomes healthy, right after adding a setting.**
+`config.py` refuses to import when a required variable is missing, so a deploy
+that introduces one fails on every host whose `.env` has not been updated. That
+is deliberate — a container that starts without its configuration and only fails
+when a guest talks to it is worse than one that never starts — but it means new
+settings are a two-step release:
+
+```bash
+ssh agent
+sudo -u ubuntu vi /opt/support-agent/deploy/.env   # add the new variable first
+```
+
+Then deploy. The host rolls back to the previous image in the meantime, so the
+site stays up while the variable is missing.
+
 **The container never becomes healthy.** The host has already rolled back, so
 production is up on the previous image. Read the SSM output in the job log, then
 reproduce locally:

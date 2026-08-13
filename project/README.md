@@ -8,16 +8,38 @@ hotel. Everything else in this repository exists to get this directory onto a
 project/
 ├── Dockerfile              # multi-stage, non-root, healthcheck
 ├── .env.example
+├── tests/
 └── app/
-    ├── main.py             # FastAPI: /health, /chat, /chat/stream
+    ├── main.py             # FastAPI: /health, /session, /ui, /chat, /chat/stream
     ├── agent.py            # ReAct loop over Groq
     ├── tools.py            # documentation search + reservation lookup
+    ├── security.py         # token, lockout, rate limits
     ├── config.py           # settings, validated at import
     ├── requirements.txt
+    ├── static/index.html   # the browser client, one file
     └── data/
         ├── kb/*.md         # the hotel documentation the agent answers from
         └── reservations.json
 ```
+
+## Getting in
+
+`/chat` and `/chat/stream` need `Authorization: Bearer $API_TOKEN`. `/health` does
+not — the container healthcheck calls it, and a healthcheck that needs a secret
+fails for the wrong reasons. `/session` validates a token and costs nothing, so
+the browser client can check one without spending anybody's quota.
+
+Five wrong tokens from one address lock that address out for fifteen minutes. The
+lockout is keyed on the address rather than on the token, because locking the
+token would hand any stranger a denial of service for the price of five bad
+requests.
+
+Two rate limits sit in front of every request that reaches Groq: ten per minute
+per token, and a daily cap across all callers. The first is fairness, the second
+is the bill. Both answer with `429` and a `Retry-After`.
+
+Every counter is in memory. A deploy resets them, and they are correct only
+because one container with one worker serves the site.
 
 ## How it answers
 
@@ -55,15 +77,16 @@ Or in the container it actually ships in:
 
 ```bash
 docker build -t support-agent .
-docker run --rm -p 8000:8000 -e GROQ_API_KEY=... support-agent
+docker run --rm -p 8000:8000 --env-file .env support-agent
 curl localhost:8000/health
 ```
 
-Interactive API documentation is at `/docs`.
+The browser client is at `/ui` and the API documentation at `/docs`.
 
 ```bash
 curl -X POST localhost:8000/chat \
   -H 'content-type: application/json' \
+  -H "Authorization: Bearer $API_TOKEN" \
   -d '{"messages":[{"role":"user","content":"Can I bring my dog?"}]}'
 ```
 
@@ -76,15 +99,27 @@ forbids, and which is worth watching for.
 This is the binding constraint on every dependency decision here. Measured on the
 host:
 
-| Container | v1 | v2 |
-|---|---|---|
-| caddy | ~25 MiB | ~25 MiB |
-| api | ~33 MiB | **~72 MiB** |
+| Container | v1 | v2 | v4 |
+|---|---|---|---|
+| caddy | ~25 MiB | ~25 MiB | ~25 MiB |
+| api | ~33 MiB | ~70 MiB | **~72 MiB** |
 
-The agent cost 39 MiB, almost all of it LangChain and LangGraph at import. That
-is measured at idle, on the built arm64 image, not estimated. Under a real
-conversation it will be higher, and `mem_limit: 192m` on the api service is what
-stops a leak from taking the host down with it.
+The agent cost 37 MiB, almost all of it LangChain and LangGraph at import.
+Authentication, the rate limiter and the whole browser interface cost 2 MiB
+between them — which is the argument for serving one HTML file instead of
+running Streamlit, measured at 46 MiB just to import, or Gradio at 132 MiB.
+
+All of it measured at idle on the built arm64 image, not estimated. Two things
+push it higher:
+
+- **The healthcheck spikes it by 10 MiB every 30 seconds.** `HEALTHCHECK` runs
+  `python -c ...`, which starts a second interpreter inside the container's
+  cgroup. Baseline 69.8 MiB, peak 80.2 MiB. Harmless under `mem_limit: 192m`,
+  and worth knowing before it is mistaken for a leak.
+- A real conversation holds message history and the model client's buffers.
+
+`mem_limit: 192m` on the api service is what stops any of that from taking the
+host down with it.
 
 Consequences, which are rules and not suggestions:
 
