@@ -85,6 +85,7 @@ Order of operations when closing a version:
 
 | Tag | Contents |
 |---|---|
+| `v2` | Hotel Aurora support agent: ReAct over Groq, documentation search and reservation lookup, `/chat` and `/chat/stream`. |
 | `v1` | AWS host provisioned from user-data, custom domain, Caddy with automatic TLS. No agent yet. |
 
 ## Repository layout

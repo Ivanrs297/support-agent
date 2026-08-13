@@ -39,16 +39,23 @@ Two runbooks already back the infrastructure lectures:
 
 ## The agent
 
-`project/` holds the Support Agent: a FastAPI app in a multi-stage, non-root
-container with a healthcheck. Today it answers a hello world with host
-details; the agent is built on top of that skeleton over the course of the module.
+`project/` holds the Support Agent: a guest support assistant for **Hotel
+Aurora**, a fictional 120-room hotel. It answers from the hotel's documentation
+and can look up a reservation by confirmation code, and it is built to say "I
+don't know" rather than invent a pet fee.
 
 ```bash
 cd project
+cp .env.example .env          # add your GROQ_API_KEY
 docker build -t support-agent .
-docker run --rm -p 8000:8000 support-agent
-curl localhost:8000/health
+docker run --rm -p 8000:8000 --env-file .env support-agent
+
+curl -X POST localhost:8000/chat -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"What time is check-out?"}]}'
 ```
+
+Interactive API documentation at `/docs`. See [`project/`](project/) for how it
+answers and why nothing about the hotel lives in the system prompt.
 
 ---
 
@@ -70,13 +77,15 @@ them — is in [`docs/runbooks/aws-agent-host.md`](docs/runbooks/aws-agent-host.
 
 ## The constraint that shapes everything
 
-`t4g.nano` means **512 MiB of RAM**. With Caddy (~25 MiB) and the API (~33 MiB)
-running, roughly **150 MiB** are left for the agent.
+`t4g.nano` means **512 MiB of RAM**. Caddy takes ~25 MiB and the API ~72 MiB once
+the agent is loaded — 39 MiB of that is LangChain at import, measured rather than
+guessed.
 
 That is not a budget accident, it is the exercise: it forces **everything stateful
-out of the instance**. Managed vector DB, tracing in Langfuse Cloud, `langgraph` +
-`langchain-core` + the provider SDK — never the `langchain` meta-package — and no
-local embeddings. The container ends up stateless by construction.
+out of the instance**, and it makes every dependency a decision rather than a
+reflex. No local embeddings, no local vector store, no state on disk. The
+container ends up stateless by construction, and can be replaced mid-conversation
+without anyone noticing.
 
 See [`docs/decisions/`](docs/decisions/) for the full reasoning, including the
 tension this creates with the module's *open-source, self-hosted* principle.
@@ -99,6 +108,38 @@ The public IP costs more than the instance. That is teaching material, not trivi
 
 Each version is a [tag](https://github.com/Ivanrs297/support-agent/tags), so the
 project can be read as it was built rather than only as it ended up.
+
+### v2 — The agent
+
+A guest support assistant for **Hotel Aurora**, a fictional 120-room hotel.
+
+- A ReAct agent built with LangChain and LangGraph, on Groq's
+  `llama-3.3-70b-versatile`.
+- Two tools of deliberately different kinds. `search_hotel_policies` ranks the 28
+  sections of the hotel documentation by IDF term overlap and returns prose to
+  interpret. `get_reservation` looks up a confirmation code and returns
+  structured fields, or nothing.
+- Three endpoints, all stateless: `/health`, `/chat`, and `/chat/stream`, the
+  last streaming the reply as server-sent events. Interactive documentation at
+  `/docs`.
+- `GROQ_API_KEY` is the only required secret.
+
+Retrieval has a **relevance floor**, and that is the part worth studying. Term
+overlap alone will answer "do you offer babysitting?" with the room service
+section, because both contain the word "service" — and a model handed an
+irrelevant-but-plausible passage answers from it. Weighting terms by how rare
+they are in the corpus separates a real match from a coincidental one, and a
+passage below the floor is dropped rather than passed along. Returning nothing is
+the better failure.
+
+Deliberately absent: **no memory between requests**. The client sends the whole
+conversation each time. There is also no evaluation of whether the answers are
+any good — the retrieval thresholds were tuned against 29 hand-written cases,
+which is a spot check, not a measurement. That gap is the next module's subject,
+and naming it here is more honest than a passing test suite would be.
+
+Measured cost of the agent: **39 MiB**, taking the api container from ~33 to ~72
+MiB at idle. Almost all of it is LangChain at import.
 
 ### v1 — AWS host with domain and TLS
 
