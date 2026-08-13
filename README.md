@@ -46,16 +46,19 @@ don't know" rather than invent a pet fee.
 
 ```bash
 cd project
-cp .env.example .env          # add your GROQ_API_KEY
+cp .env.example .env          # add GROQ_API_KEY and API_TOKEN
 docker build -t support-agent .
 docker run --rm -p 8000:8000 --env-file .env support-agent
 
-curl -X POST localhost:8000/chat -H 'content-type: application/json' \
+curl -X POST localhost:8000/chat \
+  -H 'content-type: application/json' \
+  -H "Authorization: Bearer $API_TOKEN" \
   -d '{"messages":[{"role":"user","content":"What time is check-out?"}]}'
 ```
 
-Interactive API documentation at `/docs`. See [`project/`](project/) for how it
-answers and why nothing about the hotel lives in the system prompt.
+A browser interface is at [`/ui`](https://supportagent.lat/ui), and interactive
+API documentation at `/docs`. See [`project/`](project/) for how it answers and
+why nothing about the hotel lives in the system prompt.
 
 ---
 
@@ -83,8 +86,9 @@ deployed cleanly. Setup and failure modes are in
 ## The constraint that shapes everything
 
 `t4g.nano` means **512 MiB of RAM**. Caddy takes ~25 MiB and the API ~72 MiB once
-the agent is loaded — 39 MiB of that is LangChain at import, measured rather than
-guessed.
+the agent is loaded — 37 MiB of that is LangChain at import, measured rather than
+guessed. Authentication, rate limiting and the browser interface together cost 2
+MiB, which is why the interface is one HTML file and not Streamlit.
 
 That is not a budget accident, it is the exercise: it forces **everything stateful
 out of the instance**, and it makes every dependency a decision rather than a
@@ -113,6 +117,38 @@ The public IP costs more than the instance. That is teaching material, not trivi
 
 Each version is a [tag](https://github.com/Ivanrs297/support-agent/tags), so the
 project can be read as it was built rather than only as it ended up.
+
+### v4 — A door, a lock, and a meter
+
+The agent was reachable by anyone who knew the URL, and every request spent money
+at Groq. This version closes both, and gives the thing a face.
+
+- **A shared bearer token** on `/chat` and `/chat/stream`, compared in constant
+  time. `/health` stays open, because a healthcheck that needs a secret fails for
+  the wrong reasons.
+- **Five wrong tokens lock out an address** for fifteen minutes. Keyed on the
+  address rather than the token: locking the token would let any stranger take
+  the system down with five bad requests.
+- **Two rate limits.** Ten requests per minute per token so one caller cannot
+  crowd out the rest, and a daily cap across everyone, which is the one that
+  protects the bill.
+- **A browser interface at `/ui`** — one HTML file served by the API itself. No
+  build step, no second deployment, about 1 MiB of RAM. Streamlit measures 46 MiB
+  just to import and Gradio 132 MiB; on this host that decides it.
+- `/session` validates a token without spending anything, so opening the page
+  costs nobody their quota.
+
+The interface shows **which tools produced each answer**, and says so plainly
+when there were none. An answer with nothing behind it is the failure that
+matters in a support agent, and it is invisible unless the interface insists on
+showing it.
+
+Deliberately absent: **every counter lives in memory**. A deploy resets the
+lockouts and the day's tally, and it is correct only because exactly one
+container with one worker serves the site — two workers would mean two sets of
+counters and limits silently double what they claim. Externalising that state
+means a database this host has no room for. One token for everyone also means no
+per-user accounting and no revocation short of rotating it.
 
 ### v3 — Continuous deployment
 

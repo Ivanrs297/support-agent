@@ -37,13 +37,15 @@ jobs:
 
       - run: pip install -r project/requirements-dev.txt
 
-      # No GROQ_API_KEY here: the suite covers retrieval and the reservation
-      # lookup, neither of which touches the network. config.py still demands
-      # the variable at import, so it gets a placeholder.
+      # No real secrets here. The suite covers retrieval, the reservation
+      # lookup, authentication and the rate limiter — none of which touches the
+      # network. config.py still demands both variables at import, so they get
+      # placeholders, and the auth tests use the placeholder token.
       - name: Run tests
         working-directory: project
         env:
           GROQ_API_KEY: test-key-not-used
+          API_TOKEN: test-token-not-real
         run: pytest -q
 
   build:
