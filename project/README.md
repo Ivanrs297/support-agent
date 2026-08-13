@@ -39,6 +39,17 @@ aws bedrock list-foundation-models --region us-east-2 \
   --query 'modelSummaries[].modelId' --output text | tr '\t' '\n'
 ```
 
+Two things that cost an afternoon if nobody says them. The id needs its **version
+suffix** — `openai.gpt-oss-20b` is rejected with `ValidationException`,
+`openai.gpt-oss-20b-1:0` works. And **not every model on Bedrock can call
+tools**: `openai.gpt-oss-20b-1:0` and `openai.gpt-oss-120b-1:0` do;
+`google.gemma-3-*` does not, at any size — it answers with prose asking for
+clarification instead of emitting a tool call. A model that cannot call tools
+cannot be this agent, however well it writes.
+
+Cost shows as unknown for Bedrock models: the price table covers Groq only, and
+an unpriced model displayed as $0.00 would read as free.
+
 Authentication differs between them, and the difference is the interesting part.
 Groq needs an API key in a file. Bedrock needs either a key
 (`AWS_BEARER_TOKEN_BEDROCK`, which botocore finds on its own) or nothing at all
