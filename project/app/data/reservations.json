@@ -1,0 +1,57 @@
+{
+  "AUR-104582": {
+    "guest_name": "Marta Delgado",
+    "room_type": "Deluxe King",
+    "check_in": "2026-09-04",
+    "check_out": "2026-09-08",
+    "guests": 2,
+    "rate_plan": "standard",
+    "breakfast_included": true,
+    "total": "$540.00",
+    "status": "confirmed"
+  },
+  "AUR-118047": {
+    "guest_name": "Tomás Iriarte",
+    "room_type": "Family Suite",
+    "check_in": "2026-12-20",
+    "check_out": "2026-12-27",
+    "guests": 4,
+    "rate_plan": "non-refundable",
+    "breakfast_included": true,
+    "total": "$2030.00",
+    "status": "confirmed"
+  },
+  "AUR-120913": {
+    "guest_name": "Priya Raghunathan",
+    "room_type": "Standard Queen",
+    "check_in": "2026-08-18",
+    "check_out": "2026-08-21",
+    "guests": 1,
+    "rate_plan": "standard",
+    "breakfast_included": false,
+    "total": "$420.00",
+    "status": "checked_in"
+  },
+  "AUR-131265": {
+    "guest_name": "Kwame Boateng",
+    "room_type": "Aurora Suite",
+    "check_in": "2026-10-11",
+    "check_out": "2026-10-14",
+    "guests": 2,
+    "rate_plan": "standard",
+    "breakfast_included": true,
+    "total": "$930.00",
+    "status": "confirmed"
+  },
+  "AUR-142778": {
+    "guest_name": "Elena Vasilenko",
+    "room_type": "Deluxe King",
+    "check_in": "2026-07-02",
+    "check_out": "2026-07-05",
+    "guests": 2,
+    "rate_plan": "standard",
+    "breakfast_included": false,
+    "total": "$570.00",
+    "status": "cancelled"
+  }
+}
