@@ -1,2 +1,2 @@
 -r app/requirements.txt
-pytest==9.1.2
+pytest==9.1.1
