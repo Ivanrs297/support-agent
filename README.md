@@ -72,6 +72,22 @@ To find every blank still waiting for you:
 grep -rn "STEP [0-9]" project deploy infra .github/workflows
 ```
 
+And to see where you are against all 26 steps, including the ones no unit test
+can reach:
+
+```bash
+python autograder/grade.py
+
+# once you have a host and a domain, it grades those too
+GRADE_BASE_URL=https://yourdomain.com GRADE_API_TOKEN=... python autograder/grade.py
+```
+
+The autograder runs three kinds of check — one that reads your files, one that
+runs your code, and one that talks to your deployed API — and it says which kind
+each result came from, because they are not equally good evidence.
+[`autograder/README.md`](autograder/README.md) is worth five minutes before you
+trust a green tick.
+
 64 tests, four files:
 
 | File | Covers | Steps |
@@ -963,7 +979,8 @@ compare runs against. That gap is the evaluation module's subject.
 
 ## When you are done
 
-`pytest -q` is green, 64 passed. `https://yourdomain.com/ui` answers a guest
+`python autograder/grade.py` with your URL and token reports **26/26 steps
+complete**, and `pytest -q` is green, 64 passed. `https://yourdomain.com/ui` answers a guest
 question with its sources and its cost, on either provider. A merge to `main`
 deploys, and a container that never becomes healthy rolls itself back.
 
@@ -982,6 +999,7 @@ you is wrong about something specific, and finding out which is the last exercis
 | `infra/` | Infrastructure definitions. Work area. |
 | `.github/workflows/` | CI/CD. Work area, plus the two `*-solution.yml` that keep the reference deployment running. |
 | `solution/` | The finished system, every folder, explained. |
+| `autograder/` | Grades a checkout against the 26 steps, including the deployed API. |
 | `docs/runbooks/` | Reproducible procedures — [the host](docs/runbooks/aws-agent-host.md), [domain and TLS](docs/runbooks/caddy-domain-tls.md), [CI/CD](docs/runbooks/cicd.md). |
 | `docs/decisions/` | Architecture decisions and the reasoning behind them. |
 | `labs/` | One lab per lecture, added alongside its slides. |
@@ -1012,12 +1030,18 @@ folder, with the reasoning written down.
 - `deploy-solution.yml` and `rollback-solution.yml` keep supportagent.lat
   running from `solution/`, so the reference deployment stays up while the
   student's own workflow is a blank.
+- **An autograder** covering all 26 steps, including the ones no unit test can
+  reach: it reads files for the decisions, runs the code for the behaviour, and
+  interrogates the deployed API for the rest. `--self-test` grades the grader
+  against `solution/` and against the blank work area and insists on green and
+  red — which caught eight defects in the checks the first time it ran.
 
-Deliberately absent: **no per-step branches and no automated grading.** A branch
-per step means 26 branches to keep in sync with every future fix, and the test
-suite already says what passes. Also nothing that checks the AWS half — steps
-2–6 and 16–20 are verified by hand, because the alternative is mocking the
-failures that are the entire point of them.
+Deliberately absent: **no per-step branches**, because 26 branches would need
+keeping in sync with every future fix. And the autograder cannot merge to your
+main and watch what happens — steps 16 to 20 are graded by reading the files for
+the decisions they encode, which proves you chose something rather than that it
+works. The report labels those results `static` so a green step never claims
+more than it earned.
 
 ### v5 — Two providers, and the receipt
 

@@ -85,7 +85,7 @@ Order of operations when closing a version:
 
 | Tag | Contents |
 |---|---|
-| `v6` | The repository became the exercise: work areas at the root, `solution/` as the explained reference, and a 26-step guide. |
+| `v6` | The repository became the exercise: work areas at the root, `solution/` as the explained reference, a 26-step guide, and an autograder. |
 | `v5` | Groq and Bedrock switchable per request, and a per-run trace of steps, tokens and cost. |
 | `v4` | Bearer token, address lockout, per-token and daily rate limits, and a browser interface at `/ui`. |
 | `v3` | Continuous deployment: GitHub Actions builds arm64 images to ghcr and rolls them out over SSM, with automatic rollback. |
@@ -103,6 +103,7 @@ This repository is teaching material, so it holds the system twice.
 | `infra/` | Infrastructure definitions. **Work area.** |
 | `.github/workflows/` | CI/CD. **Work area**, except the two `*-solution.yml` that deploy the reference. |
 | `solution/` | The finished system, every folder, explained. **What actually gets deployed.** |
+| `autograder/` | Grades a checkout against the 26 steps of the root `README.md`. |
 | `labs/` | One lab per lecture, added alongside its slides. |
 | `docs/` | `runbooks/` for procedures, `decisions/` for architecture rationale. |
 
@@ -113,7 +114,14 @@ solution is right — it is what production runs — and the blank's docstring i
 thing to correct.
 
 Every blank carries a `STEP n` marker naming the section of the root `README.md`
-that explains it. Renumbering the steps means renumbering the markers.
+that explains it. Renumbering the steps means renumbering the markers — and the
+step numbers in `autograder/checks/`, which are asserted against `STEPS`.
+
+**A change to behaviour that the autograder checks changes three files**, not
+two: the solution, the work area's blank, and the check. Run
+`python autograder/grade.py --self-test` before committing — it grades the
+reference and the blank work area and fails if either the checks have drifted
+from the solution or a check has stopped looking at the code.
 
 Slides are private and are never committed — `.gitignore` blocks them, along with
 `.env`, keys, and Terraform state.

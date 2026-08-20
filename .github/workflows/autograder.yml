@@ -1,0 +1,47 @@
+name: Autograder
+
+# The checks are only worth anything while they still agree with the reference
+# solution, and nothing about a static check fails loudly when it drifts. This
+# runs the grader against solution/ and against the blank work area on every
+# push and insists on green and red, so a change to one without the other is
+# caught here rather than by a student.
+on:
+  push:
+    paths:
+      - "autograder/**"
+      - "solution/project/**"
+      - "solution/deploy/**"
+      - "solution/infra/**"
+      - "solution/.github/**"
+      - "project/**"
+      - "deploy/**"
+      - "infra/**"
+      - ".github/workflows/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: Grade the grader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: solution/project/requirements-dev.txt
+
+      - run: pip install -r solution/project/requirements-dev.txt
+
+      - name: The autograder's own tests
+        run: pytest -q autograder/tests
+
+      # No URL and no token: the live checks need somebody's deployment, and
+      # the point here is the checks rather than the host.
+      - name: Every offline check passes on solution/ and fails on the work area
+        run: python autograder/grade.py --self-test
