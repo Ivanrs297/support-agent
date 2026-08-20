@@ -6,6 +6,13 @@ does not come up healthy.
 
 **Audience:** AI Engineering Fellowship — Deployment module.
 
+> **Since v6, production is deployed from `solution/`.** The workflows that run
+> are `deploy-solution.yml` and `rollback-solution.yml`; the root `deploy/`,
+> `infra/` and `.github/workflows/deploy.yml` are student work areas and deploy
+> nothing. On the host the compose directory moved from
+> `/opt/support-agent/deploy` to `/opt/support-agent/solution/deploy` — see
+> [5.9](#59-after-v6-the-deploy-cannot-find-env) for the one-time move.
+
 ---
 
 ## Table of contents
@@ -14,7 +21,8 @@ does not come up healthy.
 2. [Why SSM and not SSH](#2-why-ssm-and-not-ssh)
 3. [One-time setup](#3-one-time-setup)
 4. [Rolling back](#4-rolling-back)
-5. [When it breaks](#5-when-it-breaks)
+5. [When it breaks](#5-when-it-breaks) — including
+   [the v6 directory move](#59-after-v6-the-deploy-cannot-find-env)
 
 ---
 
@@ -23,7 +31,7 @@ does not come up healthy.
 ```
 merge to main
    │
-   ├── paths touched?  project/** deploy/** .github/workflows/deploy.yml
+   ├── paths touched?  solution/project/** solution/deploy/** .github/workflows/deploy-solution.yml
    │      no  → nothing runs. Editing a lab or a runbook does not restart production.
    │      yes ↓
    │
@@ -121,8 +129,9 @@ INSTANCE_ID=i-0123456789abcdef0 bash infra/attach-ssm-profile.sh
 
 ```bash
 ssh agent
-curl -fsSL https://raw.githubusercontent.com/Ivanrs297/support-agent/main/deploy/host-setup.sh | sudo bash
-sudo -u ubuntu vi /opt/support-agent/deploy/.env    # add GROQ_API_KEY
+curl -fsSLO https://raw.githubusercontent.com/Ivanrs297/support-agent/main/solution/deploy/host-setup.sh
+COMPOSE_DIR=/opt/support-agent/solution/deploy sudo -E bash host-setup.sh
+sudo -u ubuntu vi /opt/support-agent/solution/deploy/.env    # add GROQ_API_KEY
 ```
 
 **If you already deployed by hand from another directory** — `~/deploy` from the
@@ -136,7 +145,7 @@ That is convenient, but two checkouts of one project is a trap for whoever
 debugs this next. Once the pipeline works, delete the old one:
 
 ```bash
-rm -rf ~/deploy      # after confirming /opt/support-agent/deploy is serving
+rm -rf ~/deploy      # after confirming /opt/support-agent/solution/deploy is serving
 ```
 
 ### 3.4 Make the ghcr package public
@@ -161,7 +170,7 @@ same error a private base image produces in any pipeline.
 ### 3.5 Confirm
 
 ```bash
-cd /opt/support-agent/deploy && docker compose ps
+cd /opt/support-agent/solution/deploy && docker compose ps
 curl -s https://supportagent.lat/health
 curl -sX POST https://supportagent.lat/chat -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"What time is check-out?"}]}'
@@ -286,7 +295,7 @@ settings are a two-step release:
 
 ```bash
 ssh agent
-sudo -u ubuntu vi /opt/support-agent/deploy/.env   # add the new variable first
+sudo -u ubuntu vi /opt/support-agent/solution/deploy/.env   # add the new variable first
 ```
 
 Then deploy. The host rolls back to the previous image in the meantime, so the
@@ -355,7 +364,7 @@ discards whatever the client claimed, so it cannot be spoofed, and it also canno
 be talked around. Every counter is in memory, so a restart clears them all:
 
 ```bash
-cd /opt/support-agent/deploy && docker compose restart api
+cd /opt/support-agent/solution/deploy && docker compose restart api
 ```
 
 If the token itself is being rejected, compare it without printing it:
@@ -377,7 +386,7 @@ running container against its declared configuration and recreates it when the
 `env_file` changed:
 
 ```bash
-cd /opt/support-agent/deploy && docker compose up -d
+cd /opt/support-agent/solution/deploy && docker compose up -d
 ```
 
 To see what the container actually has, without printing the secrets:
@@ -397,3 +406,58 @@ than at startup.
 
 **Nothing ran at all.** Check the path filters. A change confined to `docs/`,
 `labs/` or the root `README.md` does not deploy, which is the intended behaviour.
+
+---
+
+### 5.9 After v6, the deploy cannot find .env
+
+**Symptom.** The first deploy after the v6 restructure fails with
+`No .env in /opt/support-agent/solution/deploy. Run deploy/host-setup.sh first.`
+
+**Cause.** v6 moved the deployed system into `solution/`. The workflow now runs
+with `COMPOSE_DIR=/opt/support-agent/solution/deploy`, and that directory has no
+`.env` — the real one, holding the live secrets, is still one level up in
+`/opt/support-agent/deploy`, where `host-setup.sh` created it.
+
+**What does *not* break, and why.** Compose names a project after the
+**basename** of the directory holding the compose file. Both directories are
+called `deploy`, so both resolve to the project `deploy`, the same containers and
+the same `deploy_caddy_data` volume — the same thing already documented in
+[3.3](#33-the-host) for the `~/deploy` case. Bringing the new one up *replaces*
+the old containers rather than colliding with them on ports 80 and 443, and the
+Let's Encrypt certificates carry over untouched.
+
+Confirm that before relying on it, because everything below depends on it:
+
+```bash
+cd /opt/support-agent/deploy          && docker compose config | grep '^name:'
+cd /opt/support-agent/solution/deploy && docker compose config | grep '^name:'
+```
+
+Both must print `name: deploy`. If they do not, bring the old stack down with
+`docker compose down` before starting the new one, and expect to re-issue
+certificates.
+
+**Fix.** Once, on the host, immediately after merging v6:
+
+```bash
+cd /opt/support-agent
+git fetch origin main && git checkout --force origin/main
+
+# Move the live secrets, do not regenerate them. The API_TOKEN in here is the
+# one people are already using.
+sudo cp deploy/.env solution/deploy/.env
+sudo chown ubuntu:ubuntu solution/deploy/.env
+sudo chmod 600 solution/deploy/.env
+
+cd solution/deploy && docker compose up -d && docker compose ps
+```
+
+Then confirm from outside:
+
+```bash
+curl -sI https://supportagent.lat/health | head -1
+```
+
+The root `deploy/.env` is now dead weight holding live secrets in a directory
+that is a student work area. Delete it once the new stack is serving.

@@ -1,5 +1,7 @@
 """Who may call the agent, and how often.
 
+STEPS 21, 22 and 23 — see README §21, §22 and §23.
+
 Three separate concerns, deliberately kept apart because they fail differently:
 
 - **Authentication.** A shared bearer token. One secret, compared in constant
@@ -9,12 +11,12 @@ Three separate concerns, deliberately kept apart because they fail differently:
   token window keeps one caller from crowding out the rest, and a daily cap is
   the one that protects the bill.
 
-All state is in memory. That is a real limitation and it is the right trade here:
-the container is stateless by design, so a deploy resets every counter, and this
-works only because exactly one container with one worker serves the site. Two
-workers would mean two independent sets of counters and limits that are silently
-double what they claim. Externalising the state means a database this host has no
-room for.
+All state is in memory. That is a real limitation and it is the right trade
+here: the container is stateless by design, so a deploy resets every counter,
+and this works only because exactly one container with one worker serves the
+site. Two workers would mean two independent sets of counters and limits that
+are silently double what they claim. Externalising the state means a database
+this host has no room for.
 """
 
 import time
@@ -25,15 +27,15 @@ from fastapi import HTTPException, Request, status
 
 from . import config
 
-# Read through the module rather than binding the object: Settings is frozen, so
-# a test that needs different limits replaces the whole instance. Binding
-# `settings` here would keep this module pointed at the original.
+# Read settings through the module rather than binding the object. Settings is
+# frozen, so a test that needs different limits replaces the whole instance;
+# binding `settings` here would keep this module pointed at the original.
 
-# Failed attempts and lockouts, keyed by client address.
+# STEP 22.1 — failed attempts and lockouts, keyed by client address.
 _failures: dict[str, int] = defaultdict(int)
 _locked_until: dict[str, float] = {}
 
-# Request timestamps, for the two rate limit windows.
+# STEP 23.1 — request timestamps, for the two rate limit windows.
 _token_calls: dict[str, deque[float]] = defaultdict(deque)
 _daily_calls: deque[float] = deque()
 
@@ -43,145 +45,135 @@ DAY_SECONDS = 86_400
 def client_address(request: Request) -> str:
     """The caller's address, as seen through Caddy.
 
-    `X-Forwarded-For` is trusted here because nothing else can reach this
-    process: the api service publishes no ports, so the only path in is through
-    the reverse proxy on the same Docker network. Expose the port directly and
-    this header becomes attacker-controlled, and with it the lockout key.
+    STEP 22.2
+    `X-Forwarded-For` is trustworthy here only because nothing else can reach
+    this process: the api service publishes no ports, so the only path in is
+    through the reverse proxy on the same Docker network. Expose the port
+    directly and this header becomes attacker-controlled, and with it the
+    lockout key — five forged headers and anyone can lock out anyone.
 
-    The first entry is the original client; the rest are proxies.
+    The first entry is the original client; the rest are proxies. Fall back to
+    request.client.host when the header is absent, which is what happens when
+    you run this locally without Caddy in front.
+
+    Verify the assumption rather than trusting it. README §22 shows how to check
+    whether your proxy replaces this header or appends to it — if it appends,
+    the first entry is whatever the caller claimed and this is worthless.
     """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    raise NotImplementedError("STEP 22.2 — see README §22")
 
 
 def _bearer_token(request: Request) -> str | None:
-    header = request.headers.get("authorization", "")
-    scheme, _, value = header.partition(" ")
-    if scheme.lower() != "bearer" or not value:
-        return None
-    return value.strip()
+    """Pull the token out of `Authorization: Bearer <token>`, or None.
+
+    STEP 21.1
+    """
+    raise NotImplementedError("STEP 21.1 — see README §21")
 
 
 def _prune(timestamps: deque[float], window: float, now: float) -> None:
-    while timestamps and now - timestamps[0] >= window:
-        timestamps.popleft()
+    """Drop timestamps that have fallen out of the window.
+
+    STEP 23.2
+    A deque and this three-line function are the whole sliding window. Anything
+    fancier here is a dependency you have to justify at 512 MiB.
+    """
+    raise NotImplementedError("STEP 23.2 — see README §23")
 
 
 def _too_many_requests(detail: str, retry_after: int) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail=detail,
-        headers={"Retry-After": str(max(1, retry_after))},
-    )
+    """A 429 that says when to come back.
+
+    STEP 23.3
+    A 429 without `Retry-After` tells a client it failed but not what to do
+    about it, so the only strategy left is to retry immediately and make it
+    worse.
+    """
+    raise NotImplementedError("STEP 23.3 — see README §23")
 
 
 def check_lockout(address: str, now: float) -> None:
-    """Refuse an address that has already failed too many times."""
-    until = _locked_until.get(address)
-    if until is None:
-        return
-    if now >= until:
-        # Expired. Clear it so a later failure starts from zero.
-        del _locked_until[address]
-        _failures.pop(address, None)
-        return
-    raise _too_many_requests(
-        "Too many failed attempts. Try again later.", int(until - now)
-    )
+    """Refuse an address that has already failed too many times.
+
+    STEP 22.3
+    When a lockout has expired, clear both the lockout and the failure count so
+    a later mistake starts from zero. Leave the count behind and the sixth typo
+    of someone's life locks them out instantly.
+    """
+    raise NotImplementedError("STEP 22.3 — see README §22")
 
 
 def register_failure(address: str, now: float) -> None:
-    _failures[address] += 1
-    if _failures[address] >= config.settings.max_token_attempts:
-        _locked_until[address] = now + config.settings.lockout_seconds
+    """Count a wrong token, and lock the address at the limit.
+
+    STEP 22.4
+    Keyed on the address, not the token. Locking the token would hand any
+    stranger a denial of service for the price of five bad requests.
+    """
+    raise NotImplementedError("STEP 22.4 — see README §22")
 
 
 def register_success(address: str) -> None:
     """A correct token clears the record.
 
-    Otherwise four typos followed by months of correct use would still end in a
+    STEP 22.5
+    Otherwise four typos followed by months of correct use still end in a
     lockout, which punishes the one caller proven to hold the token.
     """
-    _failures.pop(address, None)
-    _locked_until.pop(address, None)
+    raise NotImplementedError("STEP 22.5 — see README §22")
 
 
 def check_rate_limits(token: str, now: float) -> None:
     """Enforce the per-token window first, then the daily cap.
 
-    Order matters for the message the caller gets: being told to slow down is
-    actionable, being told the day's budget is gone is not, and the second
+    STEP 23.4
+    Order matters for the message the caller gets. Being told to slow down is
+    actionable; being told the day's budget is gone is not, and the second
     should only be said when it is true.
+
+    Record the call against both windows only after both have passed. Charge
+    first and a rejected request still spends quota.
     """
-    calls = _token_calls[token]
-    _prune(calls, 60.0, now)
-    if len(calls) >= config.settings.rate_limit_per_minute:
-        raise _too_many_requests(
-            f"Rate limit: {config.settings.rate_limit_per_minute} requests per minute.",
-            int(60 - (now - calls[0])),
-        )
-
-    _prune(_daily_calls, DAY_SECONDS, now)
-    if len(_daily_calls) >= config.settings.daily_request_cap:
-        raise _too_many_requests(
-            "The daily request budget for this deployment is spent.",
-            int(DAY_SECONDS - (now - _daily_calls[0])),
-        )
-
-    calls.append(now)
-    _daily_calls.append(now)
+    raise NotImplementedError("STEP 23.4 — see README §23")
 
 
 async def require_token(request: Request) -> str:
     """Authenticate the caller. Returns the token, for the rate limiter to key on.
 
+    STEP 21.2
+    Compare with `compare_digest`, not `==`. String equality returns early at
+    the first differing byte, and the time it takes leaks the prefix.
+
+    Check the lockout BEFORE checking the token, or a locked-out address still
+    gets a free guess on every request.
+
+    Say how many attempts are left in the 401 detail. That is not a leak worth
+    worrying about — the limit is published in the docs — and without it the
+    interface can only tell someone they are locked out after it has happened.
+
     `/health` is deliberately not guarded: the container healthcheck calls it,
     and a healthcheck that needs a secret is a healthcheck that fails for the
     wrong reasons.
     """
-    address = client_address(request)
-    now = time.monotonic()
-
-    check_lockout(address, now)
-
-    token = _bearer_token(request)
-    if token is None or not compare_digest(token, config.settings.api_token):
-        register_failure(address, now)
-        remaining = max(0, config.settings.max_token_attempts - _failures[address])
-        # Saying how many attempts are left is not a leak worth worrying about
-        # — the limit is published in the docs — and without it the interface
-        # can only tell someone they are locked out after it has happened.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=(
-                f"Invalid token. {remaining} attempt{'' if remaining == 1 else 's'} "
-                "left before this address is locked out."
-                if remaining
-                else "Invalid token. This address is now locked out."
-            ),
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    register_success(address)
-    return token
+    raise NotImplementedError("STEP 21.2 — see README §21")
 
 
 async def enforce_rate_limit(request: Request) -> None:
-    """Charge a request against the windows. Only on endpoints that call Groq.
+    """Charge a request against the windows. Only on endpoints that spend money.
 
+    STEP 23.5
     Kept separate from authentication so that checking a token costs nothing.
     The interface validates a token before it will let anyone type, and that
     check must not consume anybody's quota.
     """
-    token = await require_token(request)
-    check_rate_limits(token, time.monotonic())
+    raise NotImplementedError("STEP 23.5 — see README §23")
 
 
 def reset_state() -> None:
-    """Clear every counter. For tests, which must not leak state into each other."""
-    _failures.clear()
-    _locked_until.clear()
-    _token_calls.clear()
-    _daily_calls.clear()
+    """Clear every counter. For tests, which must not leak state into each other.
+
+    STEP 23.6
+    Module-level mutable state is the price of not having a database. This
+    function is the receipt.
+    """
+    raise NotImplementedError("STEP 23.6 — see README §23")

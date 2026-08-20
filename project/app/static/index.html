@@ -400,44 +400,20 @@
     }
   });
 
-  // The switch is populated from the server, not hardcoded: which providers a
-  // deployment can actually use depends on its configuration, and a button that
-  // cannot work should say why rather than fail on click.
+  // STEP 25.9 — the provider switch.
+  //
+  // Populate it from GET /providers, never from a hardcoded list. Which
+  // providers a deployment can actually use depends on its configuration, and a
+  // button that cannot work should say why rather than fail on click: disable
+  // it and put the reason in its `title`.
+  //
+  // Track the selection with aria-pressed rather than a CSS class, so the state
+  // is announced to a screen reader instead of only being visible.
+  //
+  // Then reflect the server's default, so the header is never ambiguous about
+  // which provider an answer came from.
   async function loadProviders() {
-    let list;
-    try {
-      const res = await fetch("/providers");
-      if (!res.ok) return;
-      list = await res.json();
-    } catch { return; }
-
-    const box = $("providers");
-    box.replaceChildren();
-    for (const p of list) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = p.name;
-      button.disabled = !p.available;
-      button.title = p.available ? p.detail : `Unavailable: ${p.detail}`;
-      button.setAttribute("aria-pressed", String(provider === p.name));
-      button.addEventListener("click", () => {
-        provider = p.name;
-        for (const other of box.children) {
-          other.setAttribute("aria-pressed", String(other.textContent === p.name));
-        }
-      });
-      box.append(button);
-    }
-    // Reflect the server's default so the header is never ambiguous about
-    // which provider an answer came from.
-    if (!provider) {
-      const first = list.find((p) => p.available);
-      if (first) {
-        provider = first.name;
-        const match = [...box.children].find((b) => b.textContent === first.name);
-        match?.setAttribute("aria-pressed", "true");
-      }
-    }
+    throw new Error("STEP 25.9 not implemented");
   }
 
   function open() {
@@ -468,84 +444,43 @@
     return said;
   }
 
+  // STEP 24.3 — the line under every answer.
+  //
+  // Say which tools produced it, through niceName, and say plainly when there
+  // were none. "Answered without checking" is the single most important string
+  // in this interface: an answer with nothing behind it is the failure that
+  // matters in a support agent, and it is invisible unless the interface
+  // insists on showing it.
+  //
+  // Then append the trace panel below it.
   function tag(said, sources, trace) {
-    const row = document.createElement("div");
-    row.className = "meta";
-
-    const checked = document.createElement("span");
-    checked.className = "checked" + (sources.length ? "" : " none");
-    checked.textContent = sources.length
-      ? "Checked " + sources.map(niceName).join(" and ")
-      : "Answered without checking";
-    row.append(checked);
-    said.after(row);
-
-    if (trace) row.after(tracePanel(trace));
+    throw new Error("STEP 24.3 not implemented");
   }
 
   const ms = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + " s" : n + " ms");
   const num = (n) => n.toLocaleString();
 
-  // The summary line is always visible; the ledger is one click away. Someone
-  // reading an answer should see what it cost without being made to read how
-  // it was reached — but never have to leave the page to find out.
+  // STEP 26.3 — the receipt.
+  //
+  // A <details> element: the summary line is always visible, the ledger is one
+  // click away. Someone reading an answer should see what it cost without being
+  // made to read how it was reached — but never have to leave the page to find
+  // out.
+  //
+  // Summary:  provider · model · elapsed · N model calls · total tokens
+  // One row per step, numbered:
+  //     model  in 780 · out 19 → calls search_hotel_policies
+  //     tool   search_hotel_policies {"query":"pets"} → 308 chars
+  // Totals:   in · out · about $0.000086
+  //
+  // Two details carry most of the value:
+  //
+  //   - Mark a first-and-only model step that called nothing. That is the agent
+  //     speaking from memory, and it must not look like every other answer.
+  //   - cost_usd can be null. Print "cost unknown for this model", never
+  //     $0.00 — an unknown price shown as zero reads as free.
   function tracePanel(trace) {
-    const details = document.createElement("details");
-    details.className = "trace";
-
-    const summary = document.createElement("summary");
-    const tokens = trace.input_tokens + trace.output_tokens;
-    summary.textContent =
-      `${trace.provider} · ${trace.model} · ${ms(trace.ms)} · ` +
-      `${trace.model_calls} model call${trace.model_calls === 1 ? "" : "s"} · ${num(tokens)} tokens`;
-    details.append(summary);
-
-    const steps = document.createElement("div");
-    steps.className = "steps";
-    trace.steps.forEach((step, i) => {
-      const row = document.createElement("div");
-      row.className = "step";
-
-      const n = document.createElement("span");
-      n.className = "n";
-      n.textContent = i + 1;
-
-      const kind = document.createElement("span");
-      kind.className = "kind";
-      kind.textContent = step.kind;
-
-      const body = document.createElement("span");
-      body.className = "body";
-
-      if (step.kind === "model") {
-        body.textContent =
-          `in ${num(step.input_tokens)} · out ${num(step.output_tokens)}` +
-          (step.tool_calls.length ? ` → calls ${step.tool_calls.join(", ")}` : " → answers");
-        // A first-and-only model step that called nothing is the agent
-        // speaking from memory. Mark it; that is the failure worth seeing.
-        if (!step.tool_calls.length && trace.steps.length === 1) row.classList.add("none");
-      } else {
-        const args = document.createElement("span");
-        args.className = "args";
-        args.textContent = JSON.stringify(step.args);
-        body.append(step.name + " ", args, ` → ${num(step.result_chars)} chars`);
-      }
-
-      row.append(n, kind, body);
-      steps.append(row);
-    });
-    details.append(steps);
-
-    const totals = document.createElement("div");
-    totals.className = "totals";
-    const cost =
-      trace.cost_usd === null || trace.cost_usd === undefined
-        ? "cost unknown for this model"
-        : `about $${trace.cost_usd.toFixed(6)}`;
-    totals.textContent = `${num(trace.input_tokens)} in · ${num(trace.output_tokens)} out · ${cost}`;
-    details.append(totals);
-
-    return details;
+    throw new Error("STEP 26.3 not implemented");
   }
 
   const niceName = (tool) => ({
@@ -553,86 +488,27 @@
     get_reservation: "the booking system",
   }[tool] || tool);
 
+  // STEP 14.3 — reading server-sent events.
+  //
+  // POST the whole conversation and the chosen provider to /chat/stream, then
+  // read res.body.getReader() in a loop. There is no EventSource here: it only
+  // does GET, and the conversation does not belong in a query string.
+  //
+  // Decode with { stream: true }, split the buffer on blank lines, and keep the
+  // last piece — a chunk boundary lands mid-event often enough that dropping
+  // the tail loses tokens on long answers and nothing on short ones, which is
+  // the worst kind of bug to find later.
+  //
+  // Handle four payloads: token, sources, trace, error. The error event is the
+  // one people leave out, and then every provider failure looks like a dropped
+  // connection.
+  //
+  // Housekeeping that matters: push the guest turn before the request and pop
+  // it again on any failure, or a retry re-sends a question the agent never
+  // answered. Lock the composer while busy. On a 401, send them back to the
+  // gate — the token was rotated, or the address is now locked out.
   async function ask(question) {
-    if (busy) return;
-    busy = true;
-    $("send").disabled = true;
-    status.textContent = "";
-
-    turn("You", "guest").textContent = question;
-    messages.push({ role: "user", content: question });
-
-    const said = turn("Front desk", "desk-turn");
-    said.classList.add("caret");
-
-    try {
-      const res = await fetch("/chat/stream", {
-        method: "POST",
-        headers: { ...authHeader(), "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, provider }),
-      });
-
-      if (!res.ok) {
-        said.classList.remove("caret");
-        said.textContent = "—";
-        status.textContent = await problem(res);
-        if (res.status === 401) lock();
-        messages.pop();
-        return;
-      }
-
-      // Server-sent events over fetch: read the stream, split on blank lines,
-      // and keep whatever tail has not been terminated yet.
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "", answer = "", sources = [], trace = null, failure = null;
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop();
-        for (const event of events) {
-          const line = event.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          const payload = JSON.parse(line.slice(6));
-          if (payload.token) {
-            answer += payload.token;
-            said.textContent = answer;
-            thread.scrollTop = thread.scrollHeight;
-          } else if (payload.sources) {
-            sources = payload.sources;
-          } else if (payload.trace) {
-            trace = payload.trace;
-          } else if (payload.error) {
-            // The server could not report this as a status code — the response
-            // had already started. Show what it said rather than a shrug.
-            failure = payload.error;
-          }
-        }
-      }
-
-      said.classList.remove("caret");
-
-      if (failure) {
-        said.textContent = answer || "—";
-        status.textContent = failure;
-        messages.pop();
-        return;
-      }
-
-      messages.push({ role: "assistant", content: answer });
-      tag(said, sources, trace);
-    } catch {
-      said.classList.remove("caret");
-      status.textContent = "The connection dropped mid-answer. Ask again.";
-      messages.pop();
-    } finally {
-      busy = false;
-      $("send").disabled = false;
-      $("question").focus();
-    }
+    throw new Error("STEP 14.3 not implemented");
   }
 
   function lock() {

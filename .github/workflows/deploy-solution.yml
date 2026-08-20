@@ -1,0 +1,229 @@
+name: Deploy the reference solution
+
+# supportagent.lat runs `solution/`, not the work areas at the root of this
+# repository.
+#
+# The root `.github/workflows/deploy.yml` is a work area — a student writes it
+# in steps 18 to 20 and points it at their own host. This file is the finished
+# one, kept separate so that the exercise stays an exercise and the reference
+# deployment stays up.
+#
+# Runs on every merge to main that touches something deployable. Editing a lab,
+# a runbook or the README does not rebuild an image or restart the host.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "solution/project/**"
+      - "solution/deploy/**"
+      - ".github/workflows/deploy-solution.yml"
+  workflow_dispatch:
+
+# One deploy at a time. Two SSM commands rewriting the same .env and racing
+# `docker compose up` is how a host ends up serving an image nobody chose.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # required for the OIDC token exchanged with AWS
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: solution/project/requirements-dev.txt
+
+      - run: pip install -r solution/project/requirements-dev.txt
+
+      # No real secrets here. The suite covers retrieval, the reservation
+      # lookup, authentication and the rate limiter — none of which touches the
+      # network. config.py still demands both variables at import, so they get
+      # placeholders, and the auth tests use the placeholder token.
+      - name: Run tests
+        working-directory: solution/project
+        env:
+          GROQ_API_KEY: test-key-not-used
+          API_TOKEN: test-token-not-real
+        run: pytest -q
+
+  build:
+    name: Build and push
+    needs: test
+    # An arm64 runner, because the host is Graviton. Building on x86 under QEMU
+    # emulation works and takes roughly ten times as long.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      # ghcr rejects a repository name containing capitals, and the owner here
+      # is `Ivanrs297`. `github.repository` is not usable verbatim.
+      - name: Compute the image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-running a workflow rebuilds and re-pushes tags that already exist,
+      # and ghcr answers a burst of those with a secondary rate limit — a 403
+      # that reads like a permissions problem and is not one. A commit maps to
+      # exactly one image, so if the tag is there, there is nothing to build.
+      - name: Is this commit already in the registry?
+        id: existing
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+          if curl -fsSL -o /dev/null \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${repo}/manifests/${GITHUB_SHA}"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "${GITHUB_SHA} is already pushed; skipping the build"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        if: steps.existing.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: solution/project
+          platforms: linux/arm64
+          push: true
+          # Both tags point at the same image. `latest` is for humans reading
+          # the registry; the SHA is what actually gets deployed, so a rollback
+          # names an exact build instead of a moving target.
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    runs-on: ubuntu-latest
+    # No `environment:` here, deliberately. Referencing a GitHub Environment
+    # rewrites the OIDC token's subject claim from
+    #   repo:<owner>/<repo>:ref:refs/heads/main
+    # to
+    #   repo:<owner>/<repo>:environment:<name>
+    # and the IAM trust policy pins the first form, so STS refuses the exchange
+    # with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+    #
+    # Keeping the branch as the boundary means one place decides who may deploy:
+    # the trust policy. Adding an environment later, for approval gates, means
+    # changing infra/setup-github-oidc.sh to match on the environment form AND
+    # restricting that environment's deployment branches to main — otherwise any
+    # branch referencing it inherits the same subject.
+    steps:
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: deploy-${{ github.run_id }}
+
+      # SendCommand answers a stopped instance, a wrong region and an unregistered
+      # SSM agent with the same opaque InvalidInstanceId. Ask first, so the log
+      # says which one it is.
+      - name: Check the host is registered with SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          echo "looking for $INSTANCE_ID in ${AWS_REGION}"
+
+          info=$(aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query 'InstanceInformationList[0]' --output json)
+
+          if [ "$info" = "null" ]; then
+            echo "::error::$INSTANCE_ID is not a managed instance in ${AWS_REGION}. Check that AWS_REGION matches where the instance lives, that it is running, that it has an instance profile with AmazonSSMManagedInstanceCore, and that amazon-ssm-agent is active on the host."
+            exit 1
+          fi
+
+          jq -r '"agent \(.AgentVersion) on \(.PlatformName) \(.PlatformVersion), ping \(.PingStatus), last seen \(.LastPingDateTime)"' <<< "$info"
+
+          [ "$(jq -r .PingStatus <<< "$info")" = "Online" ] || {
+            echo "::error::The SSM agent last reported $(jq -r .PingStatus <<< "$info"). The host is registered but not talking to SSM right now."
+            exit 1
+          }
+
+      # No SSH key, no open port 22, no long-lived AWS credentials. The runner
+      # exchanges its OIDC token for a session that may run one command on one
+      # instance, and the instance talks outbound to SSM.
+      - name: Deploy over SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${SHA::7}" \
+            --parameters "$(jq -n --arg sha "$SHA" '{
+              commands: [
+                # AWS-RunShellScript runs this with /bin/sh, which on Ubuntu is
+                # dash: `set -o pipefail` is a bashism and aborts the whole
+                # script with "Illegal option". Anything needing bash goes in
+                # remote-deploy.sh, which is invoked with bash on purpose.
+                "set -eu",
+                "cd /opt/support-agent",
+                "git fetch --quiet origin main",
+                "git checkout --quiet --force \($sha)",
+                "COMPOSE_DIR=/opt/support-agent/solution/deploy bash solution/deploy/remote-deploy.sh \($sha)"
+              ]
+            }')" \
+            --query Command.CommandId --output text)
+
+          echo "SSM command: $command_id"
+
+          # `wait` exits non-zero when the command itself failed. The status is
+          # read explicitly below, so the failure is reported with its output
+          # rather than as a bare exit code.
+          aws ssm wait command-executed \
+            --command-id "$command_id" --instance-id "$INSTANCE_ID" || true
+
+          invocation=$(aws ssm get-command-invocation \
+            --command-id "$command_id" --instance-id "$INSTANCE_ID")
+
+          echo "--- stdout ---"
+          jq -r '.StandardOutputContent' <<< "$invocation"
+          echo "--- stderr ---"
+          jq -r '.StandardErrorContent' <<< "$invocation"
+
+          status=$(jq -r '.Status' <<< "$invocation")
+          echo "status: $status"
+          [ "$status" = "Success" ] || {
+            echo "::error::Deploy failed. The host has already rolled itself back to the previous image."
+            exit 1
+          }
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Deployed"
+            echo ""
+            echo "- Image: \`ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}\`"
+            echo "- Host: \`${{ vars.EC2_INSTANCE_ID }}\` in \`${{ vars.AWS_REGION }}\`"
+            echo "- https://supportagent.lat/health"
+          } >> "$GITHUB_STEP_SUMMARY"

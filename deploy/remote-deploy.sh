@@ -1,92 +1,57 @@
 #!/usr/bin/env bash
 #
-# Runs on the EC2 host, invoked by SSM from the Deploy workflow. Takes the commit
-# SHA to deploy, which is also the image tag.
+# STEP 19.2 — see README §19.
 #
-# The host has already checked this repository out at that SHA, so this script is
-# the version of itself that belongs to the commit being deployed.
+# Runs on the EC2 host, invoked by SSM from the Deploy workflow. Takes the
+# commit SHA to deploy, which is also the image tag.
+#
+# The host has already checked this repository out at that SHA, so this script
+# is the version of itself that belongs to the commit being deployed. Read that
+# sentence twice: a bug you fix here does not fix the deploy that is running.
 #
 #   bash deploy/remote-deploy.sh <sha>
+#
+# The shape:
+#
+#   1. Read the CURRENT IMAGE_TAG out of .env before you overwrite it. That
+#      value is the only thing that makes a rollback possible, and it is gone
+#      the moment you write the new one.
+#
+#   2. Write the new tag. Not with `sed -i`: GNU sed takes no argument for that
+#      flag and BSD sed requires one, so the in-place form runs on the host and
+#      never on the laptop of whoever is changing this script. A temp file and
+#      `cat` back over the original works on both and keeps the 600 permissions.
+#
+#   3. `docker compose pull`. A failure here is almost always a private ghcr
+#      package. Restore the previous tag and exit — do not proceed to `up`.
+#
+#   4. `docker compose up -d --remove-orphans`. Not `restart`: restart reuses
+#      the existing container, and environment is resolved at container
+#      creation, so a changed .env has no effect. This costs people an hour
+#      each time they meet it.
+#
+#   5. Wait for health, and this is where the care goes. Ask compose which
+#      container belongs to this project — `docker compose ps -q --status
+#      running api` — rather than inspecting a container called "api". Names are
+#      global in Docker, so you may be inspecting a container from an earlier
+#      lecture, or one with no healthcheck at all, which looks identical to a
+#      deploy that never came up. Restrict to running containers and take the
+#      last line: during a recreate both containers exist for a moment, and two
+#      IDs in one argument makes `docker inspect` fail.
+#
+#   6. On failure: restore the previous tag, bring it back up, and exit
+#      non-zero. Say so on stderr. A rollback that happens silently is
+#      indistinguishable from a deploy that worked.
+#
+# Make COMPOSE_DIR and HEALTH_TIMEOUT overridable. You want to exercise all
+# three paths — success, unpullable image, unhealthy container — against a local
+# registry before trusting this in production, and you cannot do that if the
+# path is hardcoded.
 #
 set -euo pipefail
 
 SHA="${1:?usage: remote-deploy.sh <sha>}"
-COMPOSE_DIR="${COMPOSE_DIR:-/opt/support-agent/deploy}"  # overridable so this can be exercised off the host
+COMPOSE_DIR="${COMPOSE_DIR:-/opt/support-agent/deploy}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"
 
-cd "$COMPOSE_DIR"
-
-if [ ! -f .env ]; then
-  echo "No .env in $COMPOSE_DIR. Run deploy/host-setup.sh first." >&2
-  exit 1
-fi
-
-# Remember what is running now. This is the only thing that makes the rollback
-# below possible, and it has to be read before the file is rewritten.
-PREVIOUS=$(grep -E '^IMAGE_TAG=' .env | cut -d= -f2- || echo latest)
-echo "current: $PREVIOUS"
-echo "target:  $SHA"
-
-set_tag() {
-  # Not `sed -i`: GNU takes no argument for it and BSD requires one, so the
-  # in-place form only runs on the host and never on the laptop of whoever is
-  # changing this script. Writing through a temp file and back with `cat`
-  # works on both and keeps the 600 permissions on .env.
-  local tmp
-  tmp=$(mktemp)
-  sed "s|^IMAGE_TAG=.*|IMAGE_TAG=$1|" .env > "$tmp"
-  cat "$tmp" > .env
-  rm -f "$tmp"
-}
-
-wait_for_health() {
-  # Ask compose which container belongs to this project, rather than inspecting
-  # a container called "api". Names are global in Docker, not scoped to the
-  # project: a stack left running from an earlier lecture owns that name, and
-  # inspecting it reports on the wrong container entirely — or on one with no
-  # healthcheck at all, which looks identical to a deploy that never came up.
-  #
-  # Restricted to running containers and reduced to one line, because during a
-  # recreate both the old and the new container exist for a moment and two IDs
-  # in one argument makes `docker inspect` fail.
-  local deadline=$((SECONDS + HEALTH_TIMEOUT)) status= cid=
-  while [ $SECONDS -lt $deadline ]; do
-    cid=$(docker compose ps -q --status running api 2>/dev/null | tail -n1)
-    if [ -n "$cid" ]; then
-      status=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo missing)
-      case "$status" in
-        healthy) return 0 ;;
-        unhealthy) echo "container reported unhealthy" >&2; return 1 ;;
-      esac
-    else
-      status="no running container"
-    fi
-    sleep 3
-  done
-  echo "container did not become healthy within ${HEALTH_TIMEOUT}s (last status: $status)" >&2
-  return 1
-}
-
-set_tag "$SHA"
-
-if ! docker compose pull --quiet api; then
-  echo "could not pull $SHA. Is the ghcr package public?" >&2
-  set_tag "$PREVIOUS"
-  exit 1
-fi
-
-docker compose up -d --remove-orphans
-
-# The Dockerfile's HEALTHCHECK is the source of truth here. Asking Docker
-# whether the container is healthy tests the same thing the restart policy
-# does, from inside the network the app actually runs in.
-if ! wait_for_health; then
-  echo "rolling back to $PREVIOUS" >&2
-  set_tag "$PREVIOUS"
-  docker compose up -d --remove-orphans
-  wait_for_health || echo "the previous image is not healthy either" >&2
-  exit 1
-fi
-
-echo "deployed $SHA"
-docker compose ps --format '{{.Service}}\t{{.Image}}\t{{.Status}}'
+# TODO

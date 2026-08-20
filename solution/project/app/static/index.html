@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hotel Aurora — Guest support</title>
+<style>
+  /* Deep slate-teal and brass: the palette of hotel hardware after dark.
+     Dark first, because the front desk is open all night. */
+  :root {
+    --ink:        #0C1E27;
+    --ink-raised: #122B36;
+    --ink-line:   #1E3E4C;
+    --brass:      #C8964F;
+    --brass-dim:  #8A6835;
+    --mist:       #DCE6E8;
+    --mist-quiet: #7C949C;
+    --alarm:      #D4735E;
+    --radius: 14px;
+    --measure: 44rem;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ink:        #E7EDEE;
+      --ink-raised: #FFFFFF;
+      --ink-line:   #C8D6D9;
+      --brass:      #8A6835;
+      --brass-dim:  #A8873F;
+      --mist:       #122B36;
+      --mist-quiet: #5A727A;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--ink);
+    color: var(--mist);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Door-plate lettering: wide tracking, small, uppercase. Engraved, not
+     printed — so it is never the largest thing on the page. */
+  .plate {
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+  }
+
+  a { color: var(--brass); }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+  /* ---------- the key card ---------- */
+
+  .gate {
+    flex: 1;
+    display: grid;
+    place-items: center;
+    padding: 1.5rem;
+  }
+  .card {
+    width: min(26rem, 100%);
+    background: var(--ink-raised);
+    border: 1px solid var(--ink-line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 24px 60px -30px rgba(0,0,0,.7);
+  }
+  /* The magnetic stripe. The one piece of ornament on the page, and it earns
+     its place by being the thing you recognise before you read anything. */
+  .stripe {
+    height: 2.75rem;
+    background:
+      repeating-linear-gradient(90deg,
+        var(--brass-dim) 0 2px, transparent 2px 6px),
+      linear-gradient(180deg, var(--brass) 0%, var(--brass-dim) 100%);
+  }
+  .card-body { padding: 1.75rem 1.5rem 1.5rem; }
+  .card h1 { margin: 0; font-size: 1.35rem; letter-spacing: -.01em; font-weight: 600; }
+  .card .plate { color: var(--brass); margin-bottom: .9rem; }
+  .card p { color: var(--mist-quiet); margin: .4rem 0 1.4rem; font-size: .93rem; }
+
+  label { display: block; }
+  .field-label { color: var(--mist-quiet); margin-bottom: .4rem; }
+
+  input, textarea, button { font: inherit; }
+
+  input[type=password], textarea {
+    width: 100%;
+    background: var(--ink);
+    color: var(--mist);
+    border: 1px solid var(--ink-line);
+    border-radius: 9px;
+    padding: .7rem .85rem;
+  }
+  input[type=password] { letter-spacing: .1em; }
+
+  button {
+    background: var(--brass);
+    color: #14232B;
+    border: 0;
+    border-radius: 9px;
+    padding: .7rem 1.2rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #D9A659; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .row { display: flex; gap: .6rem; align-items: flex-end; margin-top: 1rem; }
+  .row button { flex: none; }
+
+  .notice { margin-top: .9rem; font-size: .9rem; color: var(--alarm); min-height: 1.2em; }
+
+  /* The swipe: the card slides down out of the reader once it is accepted. */
+  @keyframes swipe {
+    to { transform: translateY(120%) rotate(1.5deg); opacity: 0; }
+  }
+  .card.accepted { animation: swipe .5s cubic-bezier(.5,0,.9,.4) forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .card.accepted { animation: none; opacity: 0; }
+  }
+
+  /* ---------- the desk ---------- */
+
+  .desk { flex: 1; display: none; flex-direction: column; min-height: 0; }
+  .desk.open { display: flex; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .9rem 1.25rem;
+    border-bottom: 1px solid var(--ink-line);
+  }
+  header .plate { color: var(--brass); }
+  header .spacer { flex: 1; }
+  .quota { color: var(--mist-quiet); font-size: .78rem; }
+  .lamp {
+    width: .5rem; height: .5rem; border-radius: 50%;
+    background: var(--brass); flex: none;
+  }
+
+  .thread {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.75rem 1.25rem;
+  }
+  .thread-inner { max-width: var(--measure); margin: 0 auto; }
+
+  /* Speaker labels and a hairline rule instead of chat bubbles. A guest
+     register, not a messaging app. */
+  .turn { margin-bottom: 1.75rem; }
+  .who { color: var(--mist-quiet); margin-bottom: .35rem; }
+  .turn.desk-turn .who { color: var(--brass); }
+  .said { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .turn.guest .said { color: var(--mist); }
+  .turn.desk-turn { border-left: 2px solid var(--ink-line); padding-left: 1rem; }
+
+  .checked {
+    display: inline-block;
+    margin-top: .7rem;
+    padding: .18rem .55rem;
+    border: 1px solid var(--brass-dim);
+    border-radius: 999px;
+    color: var(--brass);
+    font-size: .68rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .checked.none { border-color: var(--alarm); color: var(--alarm); }
+
+  .caret::after {
+    content: "";
+    display: inline-block;
+    width: .5ch; height: 1em;
+    margin-left: .1ch;
+    background: var(--brass);
+    vertical-align: text-bottom;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .caret::after { animation: none; } }
+
+  .starters { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+  .starters button {
+    background: transparent;
+    color: var(--mist);
+    border: 1px solid var(--ink-line);
+    border-radius: 999px;
+    padding: .4rem .85rem;
+    font-size: .88rem;
+    font-weight: 400;
+  }
+  .starters button:hover { border-color: var(--brass); color: var(--brass); background: transparent; }
+
+  .empty h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 .3rem; }
+  .empty p { color: var(--mist-quiet); margin: 0; }
+
+  footer {
+    border-top: 1px solid var(--ink-line);
+    padding: 1rem 1.25rem 1.25rem;
+  }
+  .composer { max-width: var(--measure); margin: 0 auto; display: flex; gap: .6rem; align-items: flex-end; }
+  .composer textarea { resize: none; max-height: 8rem; }
+  .status { max-width: var(--measure); margin: .5rem auto 0; font-size: .85rem; color: var(--alarm); min-height: 1.2em; }
+
+  /* ---------- provenance and trace ---------- */
+
+  .meta { margin-top: .7rem; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+
+  details.trace { margin-top: .6rem; width: 100%; }
+  details.trace > summary {
+    cursor: pointer;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    color: var(--mist-quiet);
+    font-size: .74rem;
+    letter-spacing: .04em;
+  }
+  details.trace > summary::-webkit-details-marker { display: none; }
+  details.trace > summary::before { content: "▸"; color: var(--brass); font-size: .7rem; }
+  details.trace[open] > summary::before { content: "▾"; }
+  details.trace > summary:hover { color: var(--brass); }
+
+  /* The steps read as a ledger, not a chat: fixed columns, monospace numbers,
+     one row per thing that happened. */
+  .steps {
+    margin-top: .6rem;
+    border-left: 2px solid var(--ink-line);
+    padding-left: .9rem;
+    font-size: .76rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--mist-quiet);
+  }
+  .step { display: grid; grid-template-columns: 1.4rem 3.2rem 1fr; gap: .5rem; padding: .25rem 0; }
+  .step .n { color: var(--brass-dim); }
+  .step .kind { color: var(--brass); }
+  .step .body { overflow-wrap: anywhere; }
+  .step .args { color: var(--mist); }
+  .step.none .body { color: var(--alarm); }
+  .totals {
+    margin-top: .5rem; padding-top: .5rem;
+    border-top: 1px solid var(--ink-line);
+    font-size: .72rem; color: var(--mist-quiet);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* ---------- provider switch ---------- */
+
+  .providers { display: flex; gap: .3rem; }
+  .providers button {
+    background: transparent;
+    color: var(--mist-quiet);
+    border: 1px solid var(--ink-line);
+    border-radius: 999px;
+    padding: .2rem .7rem;
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .providers button[aria-pressed="true"] {
+    border-color: var(--brass);
+    color: var(--brass);
+  }
+  .providers button:disabled { opacity: .35; cursor: not-allowed; }
+  .providers button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--mist); background: transparent; }
+</style>
+</head>
+<body>
+
+<!-- The gate: a key card, because that is what a hotel hands you at check-in. -->
+<div class="gate" id="gate">
+  <form class="card" id="card" autocomplete="off">
+    <div class="stripe" aria-hidden="true"></div>
+    <div class="card-body">
+      <div class="plate">Hotel Aurora</div>
+      <h1>Guest support</h1>
+      <p>Ask about your room, your booking, or anything about the hotel. Your access token is on the card holder you were given at check-in.</p>
+
+      <label>
+        <span class="field-label plate">Access token</span>
+        <input type="password" id="token" required autocomplete="current-password" spellcheck="false">
+      </label>
+
+      <div class="row">
+        <button type="submit" id="unlock">Unlock</button>
+      </div>
+      <p class="notice" id="gate-notice" role="alert"></p>
+    </div>
+  </form>
+</div>
+
+<!-- The desk: where the conversation happens. -->
+<div class="desk" id="desk">
+  <header>
+    <span class="lamp" aria-hidden="true"></span>
+    <span class="plate">Hotel Aurora · Front desk</span>
+    <span class="spacer"></span>
+    <span class="providers" id="providers" role="group" aria-label="Model provider"></span>
+    <span class="quota" id="quota"></span>
+  </header>
+
+  <div class="thread" id="thread">
+    <div class="thread-inner" id="thread-inner">
+      <div class="empty" id="empty">
+        <h2>Good evening.</h2>
+        <p>Everything answered here comes from the hotel's own documentation. If it isn't written down, you'll be told so rather than guessed at.</p>
+        <div class="starters">
+          <button type="button" data-ask="What time is check-out?">Check-out time</button>
+          <button type="button" data-ask="Can I bring my dog? He is 15kg.">Bringing a dog</button>
+          <button type="button" data-ask="What are the details of reservation AUR-104582?">Look up a booking</button>
+          <button type="button" data-ask="What are the pool hours?">Pool hours</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <form class="composer" id="composer">
+      <label style="flex:1">
+        <span class="field-label plate" style="margin-bottom:.35rem">Ask about your stay</span>
+        <textarea id="question" rows="1" required placeholder="What time does the spa open?"></textarea>
+      </label>
+      <button type="submit" id="send">Ask</button>
+    </form>
+    <p class="status" id="status" role="status"></p>
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const gate = $("gate"), card = $("card"), desk = $("desk");
+  const thread = $("thread"), inner = $("thread-inner");
+  const status = $("status"), gateNotice = $("gate-notice");
+
+  // sessionStorage, not localStorage: the token should not outlive the tab.
+  const store = window.sessionStorage;
+  let token = store.getItem("aurora-token") || "";
+  let messages = [];
+  let busy = false;
+  let provider = null;   // null = let the server use its configured default
+
+  const authHeader = () => ({ "Authorization": "Bearer " + token });
+
+  async function problem(res) {
+    // FastAPI puts the explanation in `detail`. A Retry-After turns "later"
+    // into a number, which is the difference between a wall and a wait.
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch { /* no body */ }
+    const after = res.headers.get("Retry-After");
+    if (after && res.status === 429) {
+      const mins = Math.ceil(Number(after) / 60);
+      const wait = mins > 1 ? `${mins} minutes` : `${after} seconds`;
+      return `${detail || "Too many requests."} Try again in ${wait}.`;
+    }
+    return detail || `Request failed (${res.status}).`;
+  }
+
+  // ---------- unlocking ----------
+
+  card.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const entered = $("token").value.trim();
+    if (!entered) return;
+
+    const button = $("unlock");
+    button.disabled = true;
+    gateNotice.textContent = "";
+    token = entered;
+
+    try {
+      const res = await fetch("/session", { headers: authHeader() });
+      if (!res.ok) {
+        gateNotice.textContent = await problem(res);
+        token = "";
+        button.disabled = false;
+        return;
+      }
+      const info = await res.json();
+      $("quota").textContent =
+        `${info.requests_per_minute}/min · ${info.daily_cap}/day`;
+      store.setItem("aurora-token", token);
+      loadProviders();
+      open();
+    } catch {
+      gateNotice.textContent = "Could not reach the front desk. Check your connection.";
+      button.disabled = false;
+    }
+  });
+
+  // The switch is populated from the server, not hardcoded: which providers a
+  // deployment can actually use depends on its configuration, and a button that
+  // cannot work should say why rather than fail on click.
+  async function loadProviders() {
+    let list;
+    try {
+      const res = await fetch("/providers");
+      if (!res.ok) return;
+      list = await res.json();
+    } catch { return; }
+
+    const box = $("providers");
+    box.replaceChildren();
+    for (const p of list) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = p.name;
+      button.disabled = !p.available;
+      button.title = p.available ? p.detail : `Unavailable: ${p.detail}`;
+      button.setAttribute("aria-pressed", String(provider === p.name));
+      button.addEventListener("click", () => {
+        provider = p.name;
+        for (const other of box.children) {
+          other.setAttribute("aria-pressed", String(other.textContent === p.name));
+        }
+      });
+      box.append(button);
+    }
+    // Reflect the server's default so the header is never ambiguous about
+    // which provider an answer came from.
+    if (!provider) {
+      const first = list.find((p) => p.available);
+      if (first) {
+        provider = first.name;
+        const match = [...box.children].find((b) => b.textContent === first.name);
+        match?.setAttribute("aria-pressed", "true");
+      }
+    }
+  }
+
+  function open() {
+    card.classList.add("accepted");
+    const reveal = () => {
+      gate.style.display = "none";
+      desk.classList.add("open");
+      $("question").focus();
+    };
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    reduced ? reveal() : card.addEventListener("animationend", reveal, { once: true });
+  }
+
+  // ---------- the conversation ----------
+
+  function turn(who, cssClass) {
+    $("empty")?.remove();
+    const wrap = document.createElement("div");
+    wrap.className = "turn " + cssClass;
+    const label = document.createElement("div");
+    label.className = "who plate";
+    label.textContent = who;
+    const said = document.createElement("div");
+    said.className = "said";
+    wrap.append(label, said);
+    inner.append(wrap);
+    thread.scrollTop = thread.scrollHeight;
+    return said;
+  }
+
+  function tag(said, sources, trace) {
+    const row = document.createElement("div");
+    row.className = "meta";
+
+    const checked = document.createElement("span");
+    checked.className = "checked" + (sources.length ? "" : " none");
+    checked.textContent = sources.length
+      ? "Checked " + sources.map(niceName).join(" and ")
+      : "Answered without checking";
+    row.append(checked);
+    said.after(row);
+
+    if (trace) row.after(tracePanel(trace));
+  }
+
+  const ms = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + " s" : n + " ms");
+  const num = (n) => n.toLocaleString();
+
+  // The summary line is always visible; the ledger is one click away. Someone
+  // reading an answer should see what it cost without being made to read how
+  // it was reached — but never have to leave the page to find out.
+  function tracePanel(trace) {
+    const details = document.createElement("details");
+    details.className = "trace";
+
+    const summary = document.createElement("summary");
+    const tokens = trace.input_tokens + trace.output_tokens;
+    summary.textContent =
+      `${trace.provider} · ${trace.model} · ${ms(trace.ms)} · ` +
+      `${trace.model_calls} model call${trace.model_calls === 1 ? "" : "s"} · ${num(tokens)} tokens`;
+    details.append(summary);
+
+    const steps = document.createElement("div");
+    steps.className = "steps";
+    trace.steps.forEach((step, i) => {
+      const row = document.createElement("div");
+      row.className = "step";
+
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = i + 1;
+
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = step.kind;
+
+      const body = document.createElement("span");
+      body.className = "body";
+
+      if (step.kind === "model") {
+        body.textContent =
+          `in ${num(step.input_tokens)} · out ${num(step.output_tokens)}` +
+          (step.tool_calls.length ? ` → calls ${step.tool_calls.join(", ")}` : " → answers");
+        // A first-and-only model step that called nothing is the agent
+        // speaking from memory. Mark it; that is the failure worth seeing.
+        if (!step.tool_calls.length && trace.steps.length === 1) row.classList.add("none");
+      } else {
+        const args = document.createElement("span");
+        args.className = "args";
+        args.textContent = JSON.stringify(step.args);
+        body.append(step.name + " ", args, ` → ${num(step.result_chars)} chars`);
+      }
+
+      row.append(n, kind, body);
+      steps.append(row);
+    });
+    details.append(steps);
+
+    const totals = document.createElement("div");
+    totals.className = "totals";
+    const cost =
+      trace.cost_usd === null || trace.cost_usd === undefined
+        ? "cost unknown for this model"
+        : `about $${trace.cost_usd.toFixed(6)}`;
+    totals.textContent = `${num(trace.input_tokens)} in · ${num(trace.output_tokens)} out · ${cost}`;
+    details.append(totals);
+
+    return details;
+  }
+
+  const niceName = (tool) => ({
+    search_hotel_policies: "hotel documentation",
+    get_reservation: "the booking system",
+  }[tool] || tool);
+
+  async function ask(question) {
+    if (busy) return;
+    busy = true;
+    $("send").disabled = true;
+    status.textContent = "";
+
+    turn("You", "guest").textContent = question;
+    messages.push({ role: "user", content: question });
+
+    const said = turn("Front desk", "desk-turn");
+    said.classList.add("caret");
+
+    try {
+      const res = await fetch("/chat/stream", {
+        method: "POST",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ messages, provider }),
+      });
+
+      if (!res.ok) {
+        said.classList.remove("caret");
+        said.textContent = "—";
+        status.textContent = await problem(res);
+        if (res.status === 401) lock();
+        messages.pop();
+        return;
+      }
+
+      // Server-sent events over fetch: read the stream, split on blank lines,
+      // and keep whatever tail has not been terminated yet.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "", answer = "", sources = [], trace = null, failure = null;
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop();
+        for (const event of events) {
+          const line = event.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          const payload = JSON.parse(line.slice(6));
+          if (payload.token) {
+            answer += payload.token;
+            said.textContent = answer;
+            thread.scrollTop = thread.scrollHeight;
+          } else if (payload.sources) {
+            sources = payload.sources;
+          } else if (payload.trace) {
+            trace = payload.trace;
+          } else if (payload.error) {
+            // The server could not report this as a status code — the response
+            // had already started. Show what it said rather than a shrug.
+            failure = payload.error;
+          }
+        }
+      }
+
+      said.classList.remove("caret");
+
+      if (failure) {
+        said.textContent = answer || "—";
+        status.textContent = failure;
+        messages.pop();
+        return;
+      }
+
+      messages.push({ role: "assistant", content: answer });
+      tag(said, sources, trace);
+    } catch {
+      said.classList.remove("caret");
+      status.textContent = "The connection dropped mid-answer. Ask again.";
+      messages.pop();
+    } finally {
+      busy = false;
+      $("send").disabled = false;
+      $("question").focus();
+    }
+  }
+
+  function lock() {
+    store.removeItem("aurora-token");
+    token = "";
+    desk.classList.remove("open");
+    gate.style.display = "grid";
+    card.classList.remove("accepted");
+    card.style.animation = "none";
+    $("unlock").disabled = false;
+    $("token").value = "";
+    gateNotice.textContent = status.textContent;
+  }
+
+  $("composer").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const box = $("question");
+    const question = box.value.trim();
+    if (!question) return;
+    box.value = "";
+    box.style.height = "auto";
+    ask(question);
+  });
+
+  // Enter sends, Shift+Enter breaks the line — the convention people already
+  // have in their fingers.
+  $("question").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      $("composer").requestSubmit();
+    }
+  });
+
+  $("question").addEventListener("input", (event) => {
+    event.target.style.height = "auto";
+    event.target.style.height = event.target.scrollHeight + "px";
+  });
+
+  inner.addEventListener("click", (event) => {
+    const starter = event.target.closest("[data-ask]");
+    if (starter) ask(starter.dataset.ask);
+  });
+
+  // A token kept from an earlier tab still has to be checked: it may have been
+  // rotated, and the address may have been locked out since.
+  if (token) {
+    $("token").value = token;
+    $("unlock").click();
+  }
+})();
+</script>
+</body>
+</html>

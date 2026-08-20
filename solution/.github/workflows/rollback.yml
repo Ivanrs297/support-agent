@@ -1,0 +1,107 @@
+name: Rollback
+
+# Deploys an earlier commit without reverting anything in git. Use it when
+# production is broken and reverting, reviewing and merging would take longer
+# than the outage is worth.
+#
+# The follow-up is still a revert PR: main and the host disagree until then,
+# and the next merge to main will deploy over this.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full commit SHA to roll back to (must have been built by the Deploy workflow)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    name: Roll back to a previous build
+    runs-on: ubuntu-latest
+    # No `environment:` here, deliberately. Referencing a GitHub Environment
+    # rewrites the OIDC token's subject claim from
+    #   repo:<owner>/<repo>:ref:refs/heads/main
+    # to
+    #   repo:<owner>/<repo>:environment:<name>
+    # and the IAM trust policy pins the first form, so STS refuses the exchange
+    # with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
+    #
+    # Keeping the branch as the boundary means one place decides who may deploy:
+    # the trust policy. Adding an environment later, for approval gates, means
+    # changing infra/setup-github-oidc.sh to match on the environment form AND
+    # restricting that environment's deployment branches to main — otherwise any
+    # branch referencing it inherits the same subject.
+    steps:
+      - name: Check the image exists before touching the host
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ ${#SHA} -ne 40 ]; then
+            echo "::error::Give the full 40-character SHA, not a short one. The image is tagged with the full SHA."
+            exit 1
+          fi
+          repo="${GITHUB_REPOSITORY,,}"   # ghcr paths are lowercase
+          token=$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+          if ! curl -fsSL -o /dev/null \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/${repo}/manifests/$SHA"; then
+            echo "::error::No image tagged $SHA in ghcr. Pick a SHA from a successful Deploy run."
+            exit 1
+          fi
+          echo "image found"
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: rollback-${{ github.run_id }}
+
+      - name: Roll back over SSM
+        env:
+          INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "rollback to ${SHA::7}" \
+            --parameters "$(jq -n --arg sha "$SHA" '{
+              commands: [
+                # AWS-RunShellScript runs this with /bin/sh, which on Ubuntu is
+                # dash: `set -o pipefail` is a bashism and aborts the whole
+                # script with "Illegal option". Anything needing bash goes in
+                # remote-deploy.sh, which is invoked with bash on purpose.
+                "set -eu",
+                "cd /opt/support-agent",
+                "git fetch --quiet origin main",
+                "git checkout --quiet --force \($sha)",
+                "bash deploy/remote-deploy.sh \($sha)"
+              ]
+            }')" \
+            --query Command.CommandId --output text)
+
+          aws ssm wait command-executed \
+            --command-id "$command_id" --instance-id "$INSTANCE_ID" || true
+
+          invocation=$(aws ssm get-command-invocation \
+            --command-id "$command_id" --instance-id "$INSTANCE_ID")
+          jq -r '.StandardOutputContent, .StandardErrorContent' <<< "$invocation"
+
+          status=$(jq -r '.Status' <<< "$invocation")
+          [ "$status" = "Success" ] || { echo "::error::Rollback failed: $status"; exit 1; }
+
+          echo "### Rolled back to \`${SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "main still points somewhere else. Open a revert PR." >> "$GITHUB_STEP_SUMMARY"

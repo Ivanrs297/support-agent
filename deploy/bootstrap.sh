@@ -1,58 +1,43 @@
 #!/bin/bash
+#
+# STEP 3 — see README §3.
+#
+# EC2 user-data. Runs once, as root, the first time the instance boots. Paste it
+# into the launch wizard; do not SSH in and run it by hand, because the point is
+# that the host is reproducible from nothing.
+#
+# Order matters here more than in most scripts. Write it so that:
+#
+#   1. Wait for cloud-init and for the apt lock to clear. Ubuntu is still
+#      installing things when user-data starts, and an unguarded apt-get fails
+#      with a lock error that reads like a network problem.
+#
+#   2. Replace the snap SSM agent with the .deb, then purge snapd. Ubuntu AMIs
+#      ship amazon-ssm-agent as a snap, and snapd alone costs ~90 MiB of RAM.
+#      On a 512 MiB host that is the difference between fitting and not.
+#
+#   3. 2 GB of swap, with vm.swappiness tuned. Swap is not a substitute for
+#      memory; it is what turns an OOM kill into a slow minute.
+#
+#   4. Docker AND docker-compose-v2. Compose v2 is a separate package on
+#      Ubuntu, and without it the first `docker compose up -d` fails with
+#      "unknown shorthand flag: 'd'". Install git too — the deploy checks out
+#      the commit being released.
+#
+#   5. Cap the Docker log driver. Unbounded json-file logs fill a 15 GiB disk
+#      quietly and then everything fails at once.
+#
+#   6. Weekly image pruning and unattended-upgrades.
+#
+#   7. Write a sentinel file at the very end — /var/log/bootstrap-done.log.
+#      This is the only reliable way to tell a completed bootstrap from one
+#      that died halfway, and you will want it the first time an instance comes
+#      up looking healthy and behaving strangely.
+#
+# Use `set -eux`, not `set -e`. You are reading this back from
+# /var/log/cloud-init-output.log with no terminal, and the trace is the only
+# thing that tells you which line failed.
+
 set -eux
 
-# Wait for cloud-init and the apt lock to clear
-cloud-init status --wait || true
-for i in $(seq 1 30); do
-  fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
-  sleep 10
-done
-
-# ---------- SSM agent: Ubuntu AMIs ship it as a snap ----------
-# Replace with the .deb and drop snapd entirely (~90 MB of RAM back)
-snap remove amazon-ssm-agent || true
-apt-get update -y
-curl -fsSL -o /tmp/ssm.deb \
-  https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_arm64/amazon-ssm-agent.deb
-dpkg -i /tmp/ssm.deb
-systemctl enable --now amazon-ssm-agent
-rm -f /tmp/ssm.deb
-apt-get purge -y snapd || true
-rm -rf /var/cache/snapd /root/snap /home/ubuntu/snap
-
-# ---------- 2 GB swap ----------
-if [ ! -f /swapfile ]; then
-  fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
-  chmod 600 /swapfile
-  mkswap /swapfile
-  swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
-fi
-echo 'vm.swappiness=60'         >  /etc/sysctl.d/99-swap.conf
-echo 'vm.vfs_cache_pressure=50' >> /etc/sysctl.d/99-swap.conf
-sysctl -p /etc/sysctl.d/99-swap.conf
-
-# ---------- Docker ----------
-# Compose v2 is a separate package on Ubuntu. Without it you get
-# "unknown shorthand flag: 'd'" on the first `docker compose up -d`.
-# git is needed by the deploy: the host checks out the commit being released.
-apt-get install -y docker.io docker-compose-v2 git
-systemctl enable --now docker
-usermod -aG docker ubuntu
-cat > /etc/docker/daemon.json <<'EOF'
-{
-  "log-driver": "json-file",
-  "log-opts": { "max-size": "10m", "max-file": "3" }
-}
-EOF
-systemctl restart docker
-
-# ---------- Maintenance ----------
-sed -i 's|\(\s/\s\+ext4\s\+\)defaults|\1defaults,noatime|' /etc/fstab
-echo '0 3 * * 0 root docker system prune -af --filter "until=168h"' \
-  > /etc/cron.d/docker-prune
-chmod 644 /etc/cron.d/docker-prune
-apt-get install -y unattended-upgrades
-systemctl enable --now unattended-upgrades
-
-echo "bootstrap OK $(date -Is)" > /var/log/bootstrap-done.log
+# TODO

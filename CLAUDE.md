@@ -85,6 +85,7 @@ Order of operations when closing a version:
 
 | Tag | Contents |
 |---|---|
+| `v6` | The repository became the exercise: work areas at the root, `solution/` as the explained reference, and a 26-step guide. |
 | `v5` | Groq and Bedrock switchable per request, and a per-run trace of steps, tokens and cost. |
 | `v4` | Bearer token, address lockout, per-token and daily rate limits, and a browser interface at `/ui`. |
 | `v3` | Continuous deployment: GitHub Actions builds arm64 images to ghcr and rolls them out over SSM, with automatic rollback. |
@@ -93,13 +94,26 @@ Order of operations when closing a version:
 
 ## Repository layout
 
+This repository is teaching material, so it holds the system twice.
+
 | Directory | Contents |
 |---|---|
-| `project/` | The Support Agent. The only thing that gets deployed. |
-| `deploy/` | Compose file, Caddyfile, host bootstrap. |
+| `project/` | The Support Agent. **Work area** — signatures, docstrings, TODOs. |
+| `deploy/` | Compose file, Caddyfile, host bootstrap. **Work area.** |
+| `infra/` | Infrastructure definitions. **Work area.** |
+| `.github/workflows/` | CI/CD. **Work area**, except the two `*-solution.yml` that deploy the reference. |
+| `solution/` | The finished system, every folder, explained. **What actually gets deployed.** |
 | `labs/` | One lab per lecture, added alongside its slides. |
 | `docs/` | `runbooks/` for procedures, `decisions/` for architecture rationale. |
-| `infra/` | Infrastructure definitions. |
+
+**A change to behaviour lands in `solution/` and in the work area's blank.**
+Fixing only the solution leaves a student building something the reference no
+longer does; fixing only the blank ships nothing. When the two disagree, the
+solution is right — it is what production runs — and the blank's docstring is the
+thing to correct.
+
+Every blank carries a `STEP n` marker naming the section of the root `README.md`
+that explains it. Renumbering the steps means renumbering the markers.
 
 Slides are private and are never committed — `.gitignore` blocks them, along with
 `.env`, keys, and Terraform state.
