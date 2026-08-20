@@ -1,4 +1,15 @@
-supportagent.lat, www.supportagent.lat {
-    encode zstd gzip
-    reverse_proxy api:8000
-}
+# STEP 5 — see README §5.
+#
+# The whole reverse proxy and TLS configuration is three lines. Caddy obtains
+# and renews Let's Encrypt certificates on its own, provided:
+#
+#   - the site block names the real domains, apex and www;
+#   - port 80 is reachable, because the ACME HTTP-01 challenge uses it;
+#   - the certificates survive a restart, which is the volume in the compose
+#     file rather than anything in here.
+#
+# Proxy to the api service by its compose service name and port. Do not name a
+# container: service names are what Docker's embedded DNS resolves inside the
+# network, and container names are global and collide.
+#
+# TODO

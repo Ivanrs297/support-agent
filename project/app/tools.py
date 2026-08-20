@@ -1,5 +1,7 @@
 """The two tools the agent can call.
 
+STEPS 9 and 10 — see README §9 and §10.
+
 They are deliberately different in kind. `search_hotel_policies` is fuzzy: it
 returns prose and the model has to interpret it. `get_reservation` is exact: it
 returns structured fields or nothing at all. A real support agent mixes both, and
@@ -42,77 +44,74 @@ class Passage:
         return f"[{self.source} — {self.title}]\n{self.body}"
 
 
-# Longest first: "policies" must lose "ies", not "s".
+# Longest first, so that "policies" loses "ies" rather than "s".
 SUFFIXES = ("ing", "ies", "es", "ed", "s", "y", "e")
 
 
 def _normalize(word: str) -> str:
     """Strip one suffix, so related forms of a word collapse to one token.
 
+    STEP 9.1
     A guest asks "can I smoke on the balcony"; the documentation says "smoking"
     and "balconies". Without this they share no token at all.
 
-    The stems are not linguistically correct — "smoking" and "smoke" both become
-    "smok", "policy" becomes "polic". That does not matter: the same rule runs
-    over the query and over the corpus, so wrong-but-identical is all it needs to
-    be. Proper stemming means a dependency, and this is 4 lines.
+    The stems do not have to be linguistically correct. The same rule runs over
+    the query and over the corpus, so wrong-but-identical is all it needs to be.
+    Keep a minimum stem length of 3 characters, or "does" becomes "d".
     """
-    for suffix in SUFFIXES:
-        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[: -len(suffix)]
-    return word
+    raise NotImplementedError("STEP 9.1 — see README §9")
 
 
 def _tokenize(text: str) -> set[str]:
     """Content words, plus every adjacent pair joined together.
 
-    The joined pairs are what make "checkout" find "check-out" and vice versa.
-    Hyphenated and compound spellings are everywhere in hotel documentation, and
+    STEP 9.2
+    Lowercase, split on non-alphanumerics, drop STOPWORDS, normalize the rest.
+
+    Then add the joined pairs: for the words [a, b, c] also emit "ab" and "bc",
+    normalized. That is what makes "checkout" find "check-out" and vice versa.
+    Hyphenated and compound spellings are everywhere in hotel documentation and
     a guest will use whichever one they think of first.
     """
-    raw = re.findall(r"[a-z0-9]+", text.lower())
-    tokens = {_normalize(w) for w in raw if w not in STOPWORDS}
-    tokens |= {_normalize(a + b) for a, b in zip(raw, raw[1:])}
-    return tokens
+    raise NotImplementedError("STEP 9.2 — see README §9")
 
 
 def _load_passages() -> list[Passage]:
     """Split every knowledge base file into its `##` sections.
 
-    Sections are the right unit: small enough that a match is specific, large
-    enough to answer a question on their own without stitching fragments back
-    together.
+    STEP 8.1
+    Sections are the right unit of retrieval: small enough that a match is
+    specific, large enough to answer a question on their own without stitching
+    fragments back together.
+
+    `source` is the filename with hyphens turned into spaces, `title` is the
+    heading text, `body` is everything until the next heading. Raise if the
+    corpus is empty — an agent silently retrieving from nothing looks exactly
+    like an agent answering from memory.
     """
-    passages: list[Passage] = []
-    for path in sorted(KB_DIR.glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        for chunk in text.split("\n## ")[1:]:
-            title, _, body = chunk.partition("\n")
-            passages.append(
-                Passage(
-                    source=path.stem.replace("-", " "),
-                    title=title.strip(),
-                    body=body.strip(),
-                )
-            )
-    if not passages:
-        raise RuntimeError(f"No knowledge base content found in {KB_DIR}")
-    return passages
+    raise NotImplementedError("STEP 8.1 — see README §8")
 
 
 def _load_reservations() -> dict[str, dict]:
-    return json.loads((DATA_DIR / "reservations.json").read_text(encoding="utf-8"))
+    """Read data/reservations.json, keyed by confirmation code.
+
+    STEP 10.1
+    """
+    raise NotImplementedError("STEP 10.1 — see README §10")
 
 
 def _build_idf(passages: list[Passage]) -> dict[str, float]:
-    """How much signal each term carries, from how rare it is in the corpus."""
-    total = len(passages)
-    frequency: Counter[str] = Counter()
-    for passage in passages:
-        frequency.update(_tokenize(passage.title) | _tokenize(passage.body))
-    return {
-        term: math.log(1 + total / (1 + count)) for term, count in frequency.items()
-    }
+    """How much signal each term carries, from how rare it is in the corpus.
+
+    STEP 9.3
+    Count the passages each term appears in — presence, not frequency, so a word
+    repeated ten times in one section does not outrank a word in ten sections.
+    Then map each term to log(1 + total / (1 + count)).
+
+    The +1s are not decoration: without them a term appearing in every passage
+    divides by its own count and a term appearing in none divides by zero.
+    """
+    raise NotImplementedError("STEP 9.3 — see README §9")
 
 
 # Loaded once at import. The whole corpus is a few KB — reading it per request
@@ -121,17 +120,23 @@ PASSAGES = _load_passages()
 RESERVATIONS = _load_reservations()
 IDF = _build_idf(PASSAGES)
 
-# Below this, a match is one common word and nothing more. Calibrated against
-# this corpus: a term appearing in a single passage scores about 2.7, one
-# appearing in a quarter of them about 1.5. Raise it and the agent starts saying
-# "I don't know" about things it does know; lower it and it starts answering
-# from passages that merely share a word with the question.
-MIN_RELEVANCE = 2.0
+# STEP 9.5 — the relevance floor.
+#
+# Below this, a match is one common word and nothing more. It has to be
+# calibrated against this corpus rather than guessed: measure what a term
+# appearing in a single passage scores, and what one appearing in a quarter of
+# them scores, then put the floor between them.
+#
+# Raise it and the agent starts saying "I don't know" about things it does know.
+# Lower it and it starts answering from passages that merely share a word with
+# the question. README §9 walks through both failures with real queries.
+MIN_RELEVANCE = 0.0  # TODO: replace with a measured value
 
 
 def _score(query_tokens: set[str], passage: Passage) -> tuple[float, float]:
     """Sum the inverse document frequency of the query terms a passage matches.
 
+    STEP 9.4
     Counting matched terms is not enough. "babysitting service" and "vegan food"
     both match exactly one word of the corpus, but the first should return
     nothing and the second should return the dining section. What separates them
@@ -139,27 +144,17 @@ def _score(query_tokens: set[str], passage: Passage) -> tuple[float, float]:
     documentation and carries almost no signal, "vegan" appears once and carries
     all of it.
 
-    That is IDF, and on 28 passages it is a dictionary and a logarithm rather
-    than a dependency.
+    Return two numbers, and keep them apart:
 
-    Two numbers come back, and keeping them apart matters. Relevance is the raw
-    IDF of the matched terms; ranking multiplies title matches by three, because
-    a section titled "Pets" is about pets in a way a passing mention is not. If
-    the title boost fed the relevance threshold too, "babysitting service" would
-    clear it purely by matching the word "services" in a heading.
+    - `rank` orders the results, and weights a title match by 3 — a section
+      titled "Pets" is about pets in a way a passing mention is not.
+    - `relevance` is the raw IDF of the matched terms, with no title boost, and
+      it is what the floor above is compared against.
+
+    Collapse them into one and "babysitting service" clears the floor purely by
+    matching the word "services" in a heading.
     """
-    title_tokens = _tokenize(passage.title)
-    body_tokens = _tokenize(passage.body)
-    relevance = 0.0
-    rank = 0.0
-    for token in query_tokens:
-        in_title = token in title_tokens
-        if not (in_title or token in body_tokens):
-            continue
-        weight = IDF.get(token, 0.0)
-        relevance += weight
-        rank += weight * (3 if in_title else 1)
-    return rank, relevance
+    raise NotImplementedError("STEP 9.4 — see README §9")
 
 
 @tool
@@ -174,57 +169,37 @@ def search_hotel_policies(query: str) -> str:
         query: What to look for, in English, as keywords rather than a full
             sentence. For example "cancellation deadline" or "pet fee".
     """
-    tokens = _tokenize(query)
-    if not tokens:
-        return "Empty query. Provide keywords describing what to look for."
-
-    # A word the corpus has never seen anywhere is the strongest evidence there
-    # is that the guest is asking about something the hotel does not document.
-    # "babysitting", "shuttle", "laundry" appear in no section at all; "pool"
-    # and "cancellation" do.
+    # STEP 9.6
     #
-    # So the bar moves with that. A query made entirely of words the
-    # documentation knows only has to match something. A query containing an
-    # unknown word has to clear the full relevance threshold on the rest, which
-    # is what stops "babysitting service" from being answered out of the room
-    # service section on the strength of one common word.
+    # This docstring is not documentation. It is the description the model reads
+    # when it decides whether to call this tool, so it is prompt engineering
+    # wearing a docstring's clothes. Leave it alone.
     #
-    # Without this, the threshold has to be set high enough to reject
-    # "babysitting service", which then also rejects "pool hours" — the pool
-    # section says "open daily from 07:00 to 21:00" and never uses the word
-    # "hours", so only one moderately common term matches.
-    content_words = {
-        _normalize(w)
-        for w in re.findall(r"[a-z0-9]+", query.lower())
-        if w not in STOPWORDS
-    }
-    # "swimming pool hours" and "babysitting service" both mix known and unknown
-    # words, so presence alone does not separate them. What does is the balance:
-    # two of the three words in the first are vocabulary the documentation uses,
-    # against one of two in the second.
+    # What you write:
     #
-    # Note that IDF cannot separate them either — "pool" and "service" both
-    # appear in four sections and score identically, 1.89. No threshold exists
-    # that keeps one and drops the other.
-    known = sum(word in IDF for word in content_words)
-    threshold = 0.0 if known > len(content_words) - known else MIN_RELEVANCE
-
-    scored = sorted(
-        ((*_score(tokens, p), p) for p in PASSAGES), key=lambda x: x[0], reverse=True
-    )
-    # Filter before truncating: a relevant passage ranked fourth should still be
-    # returned when the three above it fell below the threshold.
-    hits = [p for _, relevance, p in scored if relevance > threshold][
-        : settings.max_doc_results
-    ]
-
-    if not hits:
-        return (
-            f"No section of the hotel documentation matches '{query}'. "
-            "Do not guess an answer: tell the guest this is not something you "
-            "have information about, and offer to pass them to a colleague."
-        )
-    return "\n\n---\n\n".join(p.render() for p in hits)
+    # 1. Tokenize the query. An empty result means an empty query — say so.
+    #
+    # 2. Decide the threshold for THIS query. A fixed floor cannot work, and
+    #    finding out why is the point of this step. Count how many content words
+    #    of the query the corpus has ever seen. A word appearing nowhere in the
+    #    documentation is the strongest evidence there is that the guest is
+    #    asking about something the hotel does not document.
+    #
+    #    A query made entirely of known vocabulary only has to match something.
+    #    A query where unknown words are the majority has to clear MIN_RELEVANCE
+    #    on the rest.
+    #
+    #    README §9 shows the two queries that force this rule — "pool hours" and
+    #    "babysitting service" — and why no single threshold separates them.
+    #
+    # 3. Score every passage, sort by rank, filter by relevance, and only then
+    #    truncate to settings.max_doc_results. Filtering after truncating drops
+    #    a relevant passage ranked fourth behind three that fell below the floor.
+    #
+    # 4. No hits is a result, not an error. Return a sentence that tells the
+    #    model to admit ignorance and offer a human, rather than an empty string
+    #    it will fill in itself.
+    raise NotImplementedError("STEP 9.6 — see README §9")
 
 
 @tool
@@ -234,16 +209,18 @@ def get_reservation(confirmation_code: str) -> str:
     Args:
         confirmation_code: The code given at booking, in the format AUR-104582.
     """
-    code = confirmation_code.strip().upper()
-    reservation = RESERVATIONS.get(code)
-    if reservation is None:
-        return (
-            f"No reservation found with code {code}. The code may be mistyped, or "
-            "the booking may have been made under a different one. Do not invent "
-            "reservation details: ask the guest to check the code on their "
-            "confirmation email."
-        )
-    return json.dumps({"confirmation_code": code, **reservation}, indent=2)
+    # STEP 10.2
+    #
+    # Normalize the code — strip it and upper-case it — then look it up.
+    #
+    # A miss returns prose, not None: say the code was not found, give the two
+    # ordinary reasons (mistyped, booked under another code), and tell the model
+    # in as many words not to invent reservation details. A tool that returns
+    # nothing leaves the model to decide what nothing means.
+    #
+    # A hit returns JSON. The model is better at reading structure than prose
+    # when the answer is a date and a room number.
+    raise NotImplementedError("STEP 10.2 — see README §10")
 
 
 TOOLS = [search_hotel_policies, get_reservation]

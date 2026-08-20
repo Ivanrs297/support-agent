@@ -10,5 +10,7 @@ lN/
 └── solution/     # reference implementation
 ```
 
-Labs run against the host provisioned in the module and the agent in
-[`project/`](../project/) — not against a toy environment.
+Labs run against the host provisioned in the module and the agent built in
+[`project/`](../project/) — not against a toy environment. The project itself is
+built step by step in the [root README](../README.md); labs go deeper on one
+idea from a lecture rather than repeating those steps.

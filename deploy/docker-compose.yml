@@ -1,38 +1,33 @@
-services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      # 80 is not decorative: the ACME HTTP-01 challenge needs it.
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Certificates live in /data. Without this volume, every restart requests a
-      # new certificate and burns through Let's Encrypt's rate limit.
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - api
-    mem_limit: 128m
-
-  api:
-    # No container_name on either service. Docker container names are
-    # global, not scoped to the compose project, so a stack left running
-    # from an earlier lecture owns the name "api" and every deploy after
-    # it dies on a conflict. Compose generates deploy-api-1, and the
-    # services still address each other by service name.
-    # Images are built in CI and pulled here. A t4g.nano must not build:
-    # 512 MiB of RAM cannot run a Docker build and serve traffic at once.
-    # For local development: docker compose build --build-context ../project
-    image: ghcr.io/ivanrs297/support-agent:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    expose:
-      - "8000"
-    env_file:
-      - .env
-    mem_limit: 192m
-
-volumes:
-  caddy_data:
-  caddy_config:
+# STEP 5 and STEP 6 — see README §5 and §6.
+#
+# Two services on one host with 512 MiB, so every line here is a budget
+# decision.
+#
+# caddy:
+#   - image caddy:2-alpine, restart unless-stopped
+#   - publishes 80 and 443. 80 is not decorative: the ACME HTTP-01 challenge
+#     needs it, and without it certificates never issue.
+#   - mounts ./Caddyfile read-only
+#   - a named volume on /data. Certificates live there. Without it every
+#     restart requests a new certificate and burns through Let's Encrypt's
+#     rate limit — which locks you out for a week, not an hour.
+#   - mem_limit
+#
+# api:
+#   - NO container_name, on either service. Docker container names are global,
+#     not scoped to the compose project, so a stack left running from an earlier
+#     lecture owns the name "api" and every deploy after it dies on a conflict.
+#     Compose generates deploy-api-1 and the services still address each other
+#     by service name.
+#   - image from ghcr, tag from ${IMAGE_TAG:-latest}. The host pulls, never
+#     builds: 512 MiB cannot run a Docker build and serve traffic at once.
+#   - `expose`, not `ports`. Publishing the API's port would put it on the
+#     public internet beside Caddy, and app/security.py trusts X-Forwarded-For
+#     precisely because that cannot happen.
+#   - env_file: .env — so a missing configuration file stops the deploy rather
+#     than producing a container that fails on the first guest.
+#   - mem_limit: this is what stops a runaway agent from taking the host down
+#     with it.
+#
+# TODO
+services: {}

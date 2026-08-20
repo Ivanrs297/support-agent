@@ -1,24 +1,32 @@
-# ---------- build stage ----------
+# STEP 15 — see README §15.
+#
+# Two stages, and the reason is the memory budget. A single-stage image carries
+# pip, its cache, and the build toolchain into production; on a 512 MiB host
+# that is not an aesthetic complaint.
+#
+# What this file has to end up doing:
+#
+#   1. Build stage: install requirements into a prefix you can copy out of.
+#   2. Runtime stage: start from a clean python:3.12-slim, copy the installed
+#      packages across, copy `app/`, and nothing else.
+#   3. Create a non-root user and USER it before CMD. Least privilege, and it
+#      costs nothing.
+#   4. EXPOSE 8000 and run uvicorn with `--workers 1`.
+#
+#      The worker count is not a performance knob here. Every rate limit and
+#      lockout counter in app/security.py lives in this process's memory, so two
+#      workers means two independent sets of counters and limits that are
+#      silently double what they claim.
+#
+#   5. A HEALTHCHECK that hits /health. This is what the deploy's health gate
+#      reads and what tells the rollback whether to fire, so it is load-bearing
+#      rather than decorative — but it starts a second Python interpreter inside
+#      the container's cgroup every 30 seconds. README §15 has the measurement.
+#
+# Order the layers so that the ones that change least come first. Copying
+# requirements.txt and installing before copying `app/` means an edit to the
+# agent does not reinstall LangChain.
+
 FROM python:3.12-slim AS builder
 
-WORKDIR /build
-COPY app/requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-# ---------- runtime stage ----------
-FROM python:3.12-slim
-
-# Non-root: least privilege, and it costs nothing
-RUN useradd -m -u 1000 appuser
-
-COPY --from=builder /install /usr/local
-WORKDIR /srv
-COPY app/ ./app/
-
-USER appuser
-EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# TODO

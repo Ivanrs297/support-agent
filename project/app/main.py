@@ -1,8 +1,13 @@
 """FastAPI surface for the Hotel Aurora support agent.
 
-Three endpoints, no state. The conversation lives in the request body, so any
-instance can serve any turn and the container can be replaced mid-conversation —
-which is exactly what a deploy does.
+STEPS 13 and 14 — see README §13 and §14.
+
+No state. The conversation lives in the request body, so any instance can serve
+any turn and the container can be replaced mid-conversation — which is exactly
+what a deploy does.
+
+The request and response models below are given to you. They are the contract,
+and arguing about field names is not the lesson. The endpoints are yours.
 """
 
 import json
@@ -90,21 +95,23 @@ class ProviderInfo(BaseModel):
 def _unconfigured(error: ValueError) -> HTTPException:
     """A provider the caller asked for that this deployment cannot serve.
 
-    400 rather than 500: nothing broke. The request named something that is not
-    configured here, and the detail says which part is missing so the caller can
-    fix it without reading the server's logs.
+    STEP 25.7
+    400, not 500. Nothing broke — the request named something that is not
+    configured here. Put the reason in the detail so the caller can fix it
+    without reading the server's logs.
     """
-    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
+    raise NotImplementedError("STEP 25.7 — see README §25")
 
 
 @app.get("/health", response_model=Health, tags=["ops"])
 def health() -> Health:
-    """Liveness probe. Used by the container healthcheck, so keep it cheap."""
-    return Health(
-        status="ok",
-        provider=config.settings.default_provider,
-        model=config.settings.groq_model,
-    )
+    """Liveness probe. Used by the container healthcheck, so keep it cheap.
+
+    STEP 13.2
+    Cheap means no model call, no disk read, no authentication. This endpoint is
+    hit every 30 seconds forever, and it is what the deploy's health gate reads.
+    """
+    raise NotImplementedError("STEP 13.2 — see README §13")
 
 
 @app.get(
@@ -116,31 +123,37 @@ def health() -> Health:
 def session() -> dict[str, str | int]:
     """Validate a token. Costs no model call and no quota.
 
-    The browser client calls this before it will accept a question, so that a
-    mistyped token fails immediately rather than after a round trip to Groq.
+    STEP 24.1
+    Note the dependency: `require_token`, not `enforce_rate_limit`. The browser
+    client calls this before it will accept a question, so a mistyped token
+    fails immediately rather than after a round trip to the model — and opening
+    the page costs nobody their quota.
+
+    Return the limits too, so the interface can display them without a second
+    endpoint.
     """
-    return {
-        "status": "authenticated",
-        "requests_per_minute": config.settings.rate_limit_per_minute,
-        "daily_cap": config.settings.daily_request_cap,
-    }
+    raise NotImplementedError("STEP 24.1 — see README §24")
 
 
 @app.get("/providers", response_model=list[ProviderInfo], tags=["ops"])
 def providers() -> list[ProviderInfo]:
     """Which providers this deployment can answer with, and why not the others.
 
+    STEP 25.8
     Unauthenticated on purpose: it exposes model names and configuration state,
-    not secrets, and the browser client needs it to render the switch before
-    anyone has typed a token.
+    not secrets, and the browser client needs it to render the provider switch
+    before anyone has typed a token.
     """
-    return [ProviderInfo(**p.__dict__) for p in available_providers()]
+    raise NotImplementedError("STEP 25.8 — see README §25")
 
 
 @app.get("/ui", response_class=HTMLResponse, include_in_schema=False)
 def ui() -> HTMLResponse:
-    """The browser client. One file, no build step, no second deployment."""
-    return HTMLResponse(UI_PAGE)
+    """The browser client. One file, no build step, no second deployment.
+
+    STEP 24.2
+    """
+    raise NotImplementedError("STEP 24.2 — see README §24")
 
 
 @app.post(
@@ -150,15 +163,14 @@ def ui() -> HTMLResponse:
     dependencies=[Depends(enforce_rate_limit)],
 )
 async def chat(request: ChatRequest) -> ChatResponse:
-    """Answer a guest question and return the complete reply."""
-    try:
-        result = await agent.run(
-            [m.model_dump() for m in request.messages],
-            provider=request.provider,
-        )
-    except ValueError as unavailable:
-        raise _unconfigured(unavailable) from unavailable
-    return ChatResponse(**result)
+    """Answer a guest question and return the complete reply.
+
+    STEP 13.3
+    Call agent.run. Catch ValueError — the vocabulary the agent raises in for an
+    unusable provider — and turn it into the 400 from `_unconfigured`. Let
+    anything else become a 500, because anything else is a real fault.
+    """
+    raise NotImplementedError("STEP 13.3 — see README §13")
 
 
 @app.post("/chat/stream", tags=["chat"], dependencies=[Depends(enforce_rate_limit)])
@@ -171,31 +183,25 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     `{"done": true}`. Tool calls happen before the first token, so expect a pause
     at the start rather than a stall mid-sentence.
     """
-    messages = [m.model_dump() for m in request.messages]
-
-    # Resolved before the response starts. A provider this deployment cannot use
-    # is a bad request, not a server fault, and saying so mid-stream would mean
-    # a 200 whose body reports a failure — the shape nothing handles well.
-    try:
-        agent._agent_for(request.provider)
-    except ValueError as unavailable:
-        raise _unconfigured(unavailable) from unavailable
-
-    async def events():
-        # A failure here cannot be an HTTP status: the 200 and its headers left
-        # before the first token did. Without an explicit event the stream just
-        # stops, and every cause — an invalid model id, a revoked credential, a
-        # provider outage — looks identical to a dropped connection. Say what
-        # happened instead.
-        try:
-            async for event in agent.stream(messages, provider=request.provider):
-                yield f"data: {json.dumps(event)}\n\n"
-        except Exception as failure:  # noqa: BLE001 — reported, not swallowed
-            yield f"data: {json.dumps({'error': f'{type(failure).__name__}: {failure}'})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    # STEP 14.2 — and this is the step people get wrong.
+    #
+    # Two failures live here and they need opposite treatment, because the 200
+    # and its headers leave before the first token does.
+    #
+    # BEFORE the response starts, you can still return a status code. Resolve
+    # the provider here — `agent._agent_for(...)` — so that asking for one this
+    # deployment cannot serve is a 400 like anywhere else. Discovering it
+    # mid-stream would mean a 200 whose body reports a failure, which is the
+    # shape nothing handles well.
+    #
+    # AFTER it starts, you cannot. An exception inside the generator just ends
+    # the stream, and every cause — an invalid model id, a revoked credential,
+    # a provider outage — reaches the browser looking identical to a dropped
+    # connection. Catch it and yield {"error": "<Type>: <message>"} so the page
+    # can say what happened. Then yield {"done": true} either way, so the client
+    # has one place to stop listening.
+    #
+    # Set `Cache-Control: no-cache` and `X-Accel-Buffering: no` on the response,
+    # or a proxy will buffer the whole stream and hand it over at once — which
+    # looks exactly like a slow model and is impossible to tell apart from one.
+    raise NotImplementedError("STEP 14.2 — see README §14")
